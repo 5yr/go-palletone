@@ -99,8 +99,8 @@ func NewTxPool(config txPoolConfig, chain dag) *TxPool {
 }
 
 func (pool *TxPool) calculateAncestorsInTxPool(txEntry *txPoolEntry, limitAncestorCount int64, limitAncestorSize int64, limitDescendantCount int64, limitDescendantSize int64) (*txHashSet, error) {
-	parentHashes, full := getTxParentsTxHash(txEntry.tx, true, limitAncestorCount)
-	if full {
+	parentHashes, ok := getTxParentsTxHash(txEntry.tx, true, limitAncestorCount)
+	if !ok {
 		return nil, errors.New("too many unconfirmed parents")
 	}
 
@@ -108,14 +108,18 @@ func (pool *TxPool) calculateAncestorsInTxPool(txEntry *txPoolEntry, limitAncest
 	setAncestors := newTxHashSet()
 	for parentHashes.size() != 0 {
 		for ph := range parentHashes.loop() {
+			// update Ancestors set and size
 			setAncestors.insert(ph)
+			currentSize += pool.mapTx[ph].getSize()
+			// Add the parent transaction to the iteration
 			phParents := pool.mapLinks[ph].getParents()
 			if phParents.size() != 0 {
 				parentHashes.merge(phParents)
 			}
+			// finish
 			parentHashes.delete(ph)
 		}
-		//TODO:if descendant numbers over limit return err.
+		//TODO: if descendant numbers over limit return err.
 		if currentSize > limitAncestorSize {
 			return nil, errors.New("exceeds ancestor size limit")
 		}
