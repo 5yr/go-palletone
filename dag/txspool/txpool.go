@@ -571,7 +571,7 @@ func (pool *TxPool) validateTx(tx *modules.TxPoolTransaction, local bool) error 
 	if pool.isTransactionInPool(hash) {
 		return errors.New(fmt.Sprintf("already have transaction %v", tx.Tx.Hash()))
 	}
-
+	// 交易池不需要验证交易存不存在。
 	err := pool.txValidator.ValidateTx(tx.Tx, false)
 	return err
 	//// 交易的校验， 包括inputs校验
@@ -716,7 +716,7 @@ func (pool *TxPool) add(tx *modules.TxPoolTransaction, local bool) (bool, error)
 	}
 
 	if ok, err := pool.ValidateOrphanTx(tx.Tx); err != nil {
-		log.Debug(err.Error())
+		log.Debug("validateOrphantx occurred error.", "info", err.Error())
 		return false, err
 	} else {
 		if ok {
@@ -1234,8 +1234,8 @@ func (pool *TxPool) Get(hash common.Hash) (*modules.TxPoolTransaction, common.Ha
 			}
 		}
 	} else {
-		log.Debug("get tx info by hash in orphan txpool... ", "info", tx)
 		tx = pool.orphans[hash]
+		log.Debug("get tx info by hash in orphan txpool... ", "txhash", tx.Tx.Hash(), "info", tx)
 	}
 
 	return tx, u_hash
@@ -1301,6 +1301,10 @@ func (pool *TxPool) DeleteTxByHash(hash common.Hash) error {
 						payment, ok := msg.Payload.(*modules.PaymentPayload)
 						if ok {
 							for _, input := range payment.Inputs {
+								// ignore coinbase. @yiran
+								if input.PreviousOutPoint == nil {
+									continue
+								}
 								delete(pool.outpoints, *input.PreviousOutPoint)
 							}
 							// delete outputs's utxo
@@ -2203,45 +2207,51 @@ func (pool *TxPool) ValidateOrphanTx(tx *modules.Transaction) (bool, error) {
 	if len(tx.Messages()) <= 0 {
 		return false, errors.New("this tx's message is null.")
 	}
-
+	var validated bool
+	var str string
+	var err error
+	hash := tx.Hash()
 	for i, msg := range tx.Messages() {
 		if msg.App == modules.APP_PAYMENT {
 			payment, ok := msg.Payload.(*modules.PaymentPayload)
 			if ok {
 				for j, in := range payment.Inputs {
-					utxo, err := pool.unit.GetUtxoEntry(in.PreviousOutPoint)
-					if err != nil && err == errors.ErrUtxoNotFound {
-						// validate utxo in pool
-						if _, has := pool.outpoints[*in.PreviousOutPoint]; has {
-							return false, nil
+					if in.PreviousOutPoint != nil {
+						utxo, err := pool.unit.GetUtxoEntry(in.PreviousOutPoint)
+						if err != nil && err == errors.ErrUtxoNotFound {
+							// validate utxo in pool
+							_, has := pool.outpoints[*in.PreviousOutPoint]
+							if _, exist := pool.orphansByPrev[*in.PreviousOutPoint]; has || exist {
+								validated = true
+								break
+							}
+						} else if err != nil && err != errors.ErrUtxoNotFound {
+							str = err.Error()
+							log.Info("get utxo failed.", "error", str)
+							break
 						}
-						if _, has := pool.orphansByPrev[*in.PreviousOutPoint]; has {
-							return false, nil
+						if utxo != nil {
+							if utxo.IsModified() || utxo.IsSpent() {
+								str = fmt.Sprintf("the tx: (%s) input utxo:<key:(%s)> is invalide。",
+									hash.String(), in.PreviousOutPoint.String())
+								log.Info(str)
+								break
+							}
 						}
-					} else if err != nil && err != errors.ErrUtxoNotFound {
-						return false, err
 					}
-
-					if utxo != nil {
-						if utxo.IsModified() || utxo.IsSpent() {
-							str := fmt.Sprintf("the tx: (%s) input utxo:<key:(%s)> is invalide。",
-								tx.Hash().String(), in.PreviousOutPoint.String())
-							return false, errors.New(str)
-						}
-					}
-
 					// 验证outputs缓存的utxo
-					hash := tx.Hash()
 					preout := modules.OutPoint{hash, uint32(i), uint32(j)}
-					if _, has := pool.outputs[preout]; !has {
-						return false, nil
+					if _, has := pool.outputs[preout]; has {
+						validated = true
+						break
 					}
-					//log.Debug("valide outputs failed.")
-					//return true, errors.New("validate outputs failed.")
-					return true, nil
 				}
 			}
 		}
 	}
-	return false, errors.New(fmt.Sprintf("the tx: (%s) is invalide, there is not payment payload.", tx.Hash().String()))
+	if str != "" {
+		err = errors.New(str)
+		return validated == true, err
+	}
+	return validated == true, nil
 }
