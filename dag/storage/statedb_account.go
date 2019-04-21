@@ -24,9 +24,9 @@ import (
 	"bytes"
 
 	"fmt"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/palletone/go-palletone/common"
 	"github.com/palletone/go-palletone/common/log"
-	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/palletone/go-palletone/dag/constants"
 	"github.com/palletone/go-palletone/dag/modules"
 )
@@ -55,7 +55,7 @@ func (acc *accountInfo) accountToInfo() *modules.AccountInfo {
 	return ai
 }
 
-func infoToaccount(ai *modules.AccountInfo) *accountInfo {
+func infoToAccount(ai *modules.AccountInfo) *accountInfo {
 	acc := newAccountInfo()
 	acc.AccountInfoBase = ai.AccountInfoBase
 
@@ -85,7 +85,7 @@ func (statedb *StateDb) RetrieveAccountInfo(address common.Address) (*modules.Ac
 }
 
 func (statedb *StateDb) StoreAccountInfo(address common.Address, info *modules.AccountInfo) error {
-	err := StoreBytes(statedb.db, accountKey(address), infoToaccount(info))
+	err := StoreBytes(statedb.db, accountKey(address), infoToAccount(info))
 	if err != nil {
 		log.Debugf("Save account info throw an error:%s", err)
 	}
@@ -93,47 +93,53 @@ func (statedb *StateDb) StoreAccountInfo(address common.Address, info *modules.A
 	return err
 }
 
-func (statedb *StateDb) UpdateAccountInfoBalance(address common.Address, addAmount int64) error {
-	info := modules.NewAccountInfo()
-	err := retrieve(statedb.db, accountKey(address), info)
-	// 第一次更新时， 数据库没有该账户的相关数据
-	if err != nil {
-		info = modules.NewAccountInfo()
-		log.Debugf("Account info for [%s] don't exist,create it first", address.String())
+func (statedb *StateDb) UpdateAccountInfo(account common.Address,
+	accountUpdateOp *modules.AccountUpdateOperation) error {
+	accountInfo, err := statedb.RetrieveAccountInfo(account)
+	if accountInfo == nil || err != nil {
+		accountInfo = modules.NewAccountInfo()
 	}
 
-	info.PtnBalance = uint64(int64(info.PtnBalance) + addAmount)
-	log.Debugf("Update Ptn Balance for address:%s, add Amount:%d", address.String(), addAmount)
+	if accountUpdateOp.DesiredMediatorCount != nil {
+		mediatorCountSet := *accountUpdateOp.DesiredMediatorCount
+		accountInfo.DesiredMediatorCount = mediatorCountSet
+		log.Debugf("Try to update DesiredMediatorCount(%v) for account(%v)", mediatorCountSet, account.Str())
+	}
 
-	return statedb.StoreAccountInfo(address, info)
+	if accountUpdateOp.VotingMediator != nil {
+		mediator := *accountUpdateOp.VotingMediator
+		accountInfo.VotedMediators[mediator] = true
+		log.Debugf("Try to save voted mediator(%v) for account(%v)", mediator.Str(), account.Str())
+	}
+
+	return statedb.StoreAccountInfo(account, accountInfo)
 }
 
-//func (statedb *StateDb) GetAccountVoteInfo(address common.Address, voteType uint8) [][]byte {
-//	accountInfo, err := statedb.GetAccountInfo(address)
-//	if err != nil {
-//		return nil
-//	}
-//	res := make([][]byte, 0)
-//	for _, vote := range accountInfo.Votes {
-//		if vote.VoteType == voteType {
-//			res = append(res, vote.Contents)
-//		}
-//	}
-//	return res
-//
-//}
+func (statedb *StateDb) UpdateAccountBalance(address common.Address, addAmount int64) error {
+	key := append(constants.ACCOUNT_PTN_BALANCE_PREFIX, address.Bytes21()...)
+	balance := uint64(0)
+	data, err := statedb.db.Get(key)
+	if err != nil {
+		// 第一次更新时， 数据库没有该账户的相关数据
+		log.Debugf("Account balance for [%s] don't exist,create it first", address.String())
+	} else {
+		balance = BytesToUint64(data)
+	}
+	//log.Debugf("Update Ptn Balance for address:%s, add Amount:%d", address.String(), addAmount)
+	balance = uint64(int64(balance) + addAmount)
+	return statedb.db.Put(key, Uint64ToBytes(balance))
+}
 
-//func (statedb *StateDb) AddVote2Account(address common.Address, voteInfo vote.VoteInfo) error {
-//	accountInfo, err := statedb.GetAccountInfo(address)
-//	if err != nil {
-//		return err
-//	}
-//	accountInfo.Votes = append(accountInfo.Votes, voteInfo)
-//	if err = statedb.SaveAccountInfo(address, accountInfo); err != nil {
-//		return err
-//	}
-//	return nil
-//}
+func (statedb *StateDb) GetAccountBalance(address common.Address) uint64 {
+	key := append(constants.ACCOUNT_PTN_BALANCE_PREFIX, address.Bytes21()...)
+	balance := uint64(0)
+	data, err := statedb.db.Get(key)
+	if err == nil {
+
+		balance = BytesToUint64(data)
+	}
+	return balance
+}
 
 func (statedb *StateDb) LookupAccount() map[common.Address]*modules.AccountInfo {
 	result := make(map[common.Address]*modules.AccountInfo)

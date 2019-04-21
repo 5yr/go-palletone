@@ -21,7 +21,9 @@
 package validator
 
 import (
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/palletone/go-palletone/common/log"
+	"github.com/palletone/go-palletone/dag/dagconfig"
 	"github.com/palletone/go-palletone/dag/modules"
 	"github.com/palletone/go-palletone/tokenengine"
 )
@@ -36,7 +38,8 @@ func (validate *Validate) validateCoinbase(payment *modules.PaymentPayload) Vali
 //1. Amount correct
 //2. Asset must be equal
 //3. Unlock correct
-func (validate *Validate) validatePaymentPayload(tx *modules.Transaction, msgIdx int, payment *modules.PaymentPayload, isCoinbase bool) ValidationCode {
+func (validate *Validate) validatePaymentPayload(tx *modules.Transaction, msgIdx int,
+	payment *modules.PaymentPayload, isCoinbase bool, usedUtxo map[string]bool) ValidationCode {
 
 	if isCoinbase {
 		return validate.validateCoinbase(payment)
@@ -44,12 +47,12 @@ func (validate *Validate) validatePaymentPayload(tx *modules.Transaction, msgIdx
 	if payment.LockTime > 0 {
 		// TODO check locktime
 	}
-
+	gasToken := dagconfig.DagConfig.GetGasToken()
 	var asset *modules.Asset
 	totalInput := uint64(0)
 	isInputnil := false
 	if len(payment.Inputs) == 0 {
-		if payment.Outputs[0].Asset.AssetId == modules.PTNCOIN {
+		if payment.Outputs[0].Asset.AssetId.Equal(gasToken) {
 			return TxValidationCode_INVALID_PAYMMENT_INPUT
 		}
 		isInputnil = true
@@ -59,19 +62,28 @@ func (validate *Validate) validatePaymentPayload(tx *modules.Transaction, msgIdx
 		if msgIdx < invokeReqMsgIdx {
 			txForSign = tx.GetRequestTx()
 		}
-		utxos := []*modules.Utxo{}
+
 		for inputIdx, in := range payment.Inputs {
 			// checkout input
 			if in == nil || in.PreviousOutPoint == nil {
 				log.Error("payment input is null.", "payment.input", payment.Inputs)
 				return TxValidationCode_INVALID_PAYMMENT_INPUT
 			}
+			usedUtxoKey := in.PreviousOutPoint.String()
+			if _, exist := usedUtxo[usedUtxoKey]; exist {
+				log.Error("double spend utxo:", usedUtxoKey)
+				return TxValidationCode_INVALID_DOUBLE_SPEND
+			}
+			usedUtxo[usedUtxoKey] = true
 			// 合约创币后同步到mediator的utxo验证不通过,在创币后需要先将创币的utxo同步到所有mediator节点。
 			utxo, err := validate.utxoquery.GetUtxoEntry(in.PreviousOutPoint)
 			if utxo == nil || err != nil {
-				return TxValidationCode_INVALID_OUTPOINT
+				//找不到对应的UTXO，应该是孤儿交易
+				return TxValidationCode_ORPHAN
 			}
-			utxos = append(utxos, utxo)
+			if utxo.IsSpent() {
+				return TxValidationCode_INVALID_DOUBLE_SPEND
+			}
 			if asset == nil {
 				asset = utxo.Asset
 			} else {
@@ -82,10 +94,15 @@ func (validate *Validate) validatePaymentPayload(tx *modules.Transaction, msgIdx
 			}
 			totalInput += utxo.Amount
 			// check SignatureScript
+
 			err = tokenengine.ScriptValidate(utxo.PkScript, nil, txForSign, msgIdx, inputIdx)
 			if err != nil {
-				log.Infof("Unlock script validate fail,tx[%s],MsgIdx[%d],In[%d],unlockScript:%x,utxoScript:%x",
+
+				log.Warnf("Unlock script validate fail,tx[%s],MsgIdx[%d],In[%d],unlockScript:%x,utxoScript:%x",
 					tx.Hash().String(), msgIdx, inputIdx, in.SignatureScript, utxo.PkScript)
+				txjson, _ := tx.MarshalJSON()
+				rlpdata, _ := rlp.EncodeToBytes(tx)
+				log.Debugf("Tx for help debug: json: %s ,rlp: %x", string(txjson), rlpdata)
 				return TxValidationCode_INVALID_PAYMMENT_INPUT
 			} else {
 				log.Debugf("Unlock script validated! tx[%s],%d,%d", tx.Hash().String(), msgIdx, inputIdx)
@@ -100,10 +117,10 @@ func (validate *Validate) validatePaymentPayload(tx *modules.Transaction, msgIdx
 	totalOutput := uint64(0)
 	//Check payment
 	//rule:
-	//	1. all outputs have same asset
+	//	1. all outputs have same asset id
 	asset0 := payment.Outputs[0].Asset
 	for _, out := range payment.Outputs {
-		if !asset0.IsSimilar(out.Asset) {
+		if !asset0.IsSameAssetId(out.Asset) {
 			return TxValidationCode_INVALID_ASSET
 		}
 		totalOutput += out.Value
@@ -113,7 +130,7 @@ func (validate *Validate) validatePaymentPayload(tx *modules.Transaction, msgIdx
 	}
 	if !isInputnil {
 		//Input Output asset mustbe same
-		if !asset.IsSimilar(asset0) {
+		if !asset.IsSameAssetId(asset0) {
 			return TxValidationCode_INVALID_ASSET
 		}
 		if totalOutput > totalInput { //相当于手续费为负数

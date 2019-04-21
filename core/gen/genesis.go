@@ -101,7 +101,7 @@ func setupGenesisUnit(genesis *core.Genesis, ks *keystore.KeyStore) (*modules.Un
 		log.Info(msg)
 	}
 	//return modules.NewGenesisUnit(genesis, txs)
-	return dagCommon.NewGenesisUnit(txs, genesis.InitialTimestamp, asset)
+	return dagCommon.NewGenesisUnit(txs, genesis.InitialTimestamp, asset, genesis.ParentUnitHeight, genesis.ParentUnitHash)
 }
 
 func GetGensisTransctions(ks *keystore.KeyStore, genesis *core.Genesis) (modules.Transactions, *modules.Asset) {
@@ -113,67 +113,70 @@ func GetGensisTransctions(ks *keystore.KeyStore, genesis *core.Genesis) (modules
 		return nil, nil
 	}
 
-	assetInfo := modules.FungibleToken{
-		Name:        genesis.Alias,
-		TotalSupply: genesis.GetTokenAmount(),
-		Decimals:    byte(genesis.TokenDecimal),
-		Symbol:      genesis.DecimalUnit,
-		//SupplyAddress: holder,
-	}
+	//assetInfo := modules.FungibleToken{
+	//	Name:        genesis.GasToken,
+	//	TotalSupply: genesis.GetTokenAmount(),
+	//	Decimals:    byte(genesis.TokenDecimal),
+	//	Symbol:      genesis.DecimalUnit,
+	//	//SupplyAddress: holder,
+	//}
 	// get new asset id
-	asset := modules.NewPTNAsset()
+	//asset := modules.NewPTNAsset()
 	//err = err
 	//asset := &modules.Asset{
 	//	AssetId: assetId,
 	//}
 	//assetInfo.AssetID = asset
-	extra, err := rlp.EncodeToBytes(assetInfo)
-	if err != nil {
-		log.Error("Get genesis assetinfo bytes error.")
-		return nil, nil
-	}
-	txin := &modules.Input{
-		Extra: extra, // save asset info
-	}
+	//extra, err := rlp.EncodeToBytes(assetInfo)
+	//if err != nil {
+	//	log.Error("Get genesis assetinfo bytes error.")
+	//	return nil, nil
+	//}
+	//txin := &modules.Input{
+	//	Extra: extra, // save asset info
+	//}
 	// generate p2pkh bytes
 	addr, _ := common.StringToAddress(holder.String())
 	pkscript := tokenengine.GenerateP2PKHLockScript(addr.Bytes())
-
+	asset, _ := modules.StringToAsset(genesis.GasToken)
 	txout := &modules.Output{
 		Value:    genesis.GetTokenAmount(),
 		Asset:    asset,
 		PkScript: pkscript,
 	}
 	pay := &modules.PaymentPayload{
-		Inputs:  []*modules.Input{txin},
+		//Inputs:  []*modules.Input{txin},
 		Outputs: []*modules.Output{txout},
 	}
 	msg0 := &modules.Message{
 		App:     modules.APP_PAYMENT,
 		Payload: pay,
 	}
-
-	// step2, generate global config payload message
-	configPayload, err := dagCommon.GenGenesisConfigPayload(genesis, asset)
+	// step2 generate text payload
+	msg1 := &modules.Message{
+		App:     modules.APP_DATA,
+		Payload: &modules.DataPayload{MainData: []byte("Genesis Text"), ExtraData: []byte(genesis.Text)},
+	}
+	tx := &modules.Transaction{
+		TxMessages: []*modules.Message{msg0, msg1},
+	}
+	// step3, generate global config payload message
+	configPayloads, err := dagCommon.GenGenesisConfigPayload(genesis, asset)
 	if err != nil {
 		log.Error("Generate genesis unit config payload error.")
 		return nil, nil
 	}
-	msg1 := &modules.Message{
-		App:     modules.APP_CONTRACT_INVOKE,
-		Payload: configPayload,
-	}
-	msg2 := &modules.Message{
-		App:     modules.APP_DATA,
-		Payload: &modules.DataPayload{MainData: []byte("Genesis Text"), ExtraData: []byte(genesis.Text)},
+
+	for _, payload := range configPayloads {
+		newMsg := &modules.Message{
+			App:     modules.APP_CONTRACT_INVOKE,
+			Payload: payload,
+		}
+		tx.TxMessages = append(tx.TxMessages, newMsg)
 	}
 
+	// step4, generate inital mediator info payload
 	initialMediatorMsgs := dagCommon.GetInitialMediatorMsgs(genesis)
-
-	// step3, genesis transaction
-	tx := &modules.Transaction{
-		TxMessages: []*modules.Message{msg0, msg1, msg2},
-	}
 	tx.TxMessages = append(tx.TxMessages, initialMediatorMsgs...)
 
 	// tx.CreationDate = tx.CreateDate()
@@ -206,60 +209,6 @@ func GenContractTransction(orgTx *modules.Transaction, msgs []*modules.Message) 
 	return tx, nil
 }
 
-func GenContractSigTransction(singer common.Address, password string, orgTx *modules.Transaction, ks *keystore.KeyStore) (*modules.Transaction, error) {
-	if orgTx == nil || len(orgTx.TxMessages) < 3 {
-		return nil, errors.New(fmt.Sprintf("GenContractSigTransctions param is error"))
-	}
-	if password != "" {
-		err := ks.Unlock(accounts.Account{Address: singer}, password)
-		if err != nil {
-			return nil, err
-		}
-	}
-	tx := orgTx
-	var sigPayload *modules.SignaturePayload
-	sigs := make([]modules.SignatureSet, 0)
-	for _, v := range tx.TxMessages {
-		if v.App == modules.APP_SIGNATURE {
-			sigPayload = v.Payload.(*modules.SignaturePayload)
-			sigs = append(sigs, sigPayload.Signatures...)
-		}
-	}
-	pubKey, err := ks.GetPublicKey(singer)
-	if err != nil {
-		return nil, errors.New(fmt.Sprintf("GenContractSigTransctions GetPublicKey fail, address[%s]", singer.String()))
-	}
-	sig, err := GetTxSig(tx, ks, singer)
-	if err != nil {
-		return nil, errors.New(fmt.Sprintf("GenContractSigTransctions GetTxSig fail, address[%s], tx[%s]", singer.String(), orgTx.RequestHash().String()))
-	}
-	sigSet := modules.SignatureSet{
-		PubKey:    pubKey,
-		Signature: sig,
-	}
-	sigs = append(sigs, sigSet)
-	msgSig := &modules.Message{
-		App: modules.APP_SIGNATURE,
-		Payload: &modules.SignaturePayload{
-			Signatures: sigs,
-		},
-	}
-	tx.TxMessages = append(tx.TxMessages, msgSig)
-	log.Debug("GenContractSigTransactions", "orgTx.TxId id ok:", tx.Hash())
-
-	return tx, nil
-}
-func GetTxSig(tx *modules.Transaction, ks *keystore.KeyStore, signer common.Address) ([]byte, error) {
-	sign, err := ks.SigData(tx, signer)
-	if err != nil {
-		msg := fmt.Sprintf("Failed to singure transaction:%v", err)
-		log.Error(msg)
-		return nil, errors.New(msg)
-	}
-
-	return sign, nil
-}
-
 //func CommitDB(dag dag.IDag, unit *modules.Unit, isGenesis bool) error {
 //	// save genesis unit to leveldb
 //	if err := dag.SaveUnit(unit, isGenesis); err != nil {
@@ -280,17 +229,34 @@ func DefaultGenesisBlock() *core.Genesis {
 		DepositAmountForJury:      core.DefaultDepositAmountForJury,
 		DepositAmountForDeveloper: core.DefaultDepositAmountForDeveloper,
 		DepositPeriod:             core.DefaultDepositPeriod,
+		UccMemory:core.DefaultUccMemory,
+		UccMemorySwap:core.DefaultUccMemorySwap,
+		UccCpuShares:core.DefaultUccCpuShares,
+		UccCpuPeriod:core.DefaultCpuPeriod,
+		UccCpuQuota:core.DefaultUccCpuQuota,
+		UccCpuSetCpus:core.DefaultUccCpuSetCpus,
+		TempUccMemory:core.DefaultTempUccMemory,
+		TempUccMemorySwap:core.DefaultTempUccMemorySwap,
+		TempUccCpuShares:core.DefaultTempUccCpuShares,
+		TempUccCpuQuota:core.DefaultTempUccCpuQuota,
 	}
 
+	DigitalIdentityConfig := core.DigitalIdentityConfig{
+		// default root ca holder, 默认是基金会地址
+		RootCAHolder: core.DefaultFoundationAddress,
+		RootCABytes:  core.DefaultRootCABytes,
+	}
 	initParams := core.NewChainParams()
 
 	return &core.Genesis{
-		Version:                configure.Version,
-		TokenAmount:            core.DefaultTokenAmount,
-		TokenDecimal:           core.DefaultTokenDecimal,
+		Version:     configure.Version,
+		TokenAmount: core.DefaultTokenAmount,
+		//TokenDecimal:           core.DefaultTokenDecimal,
+		ParentUnitHeight:       -1,
 		ChainID:                1,
 		TokenHolder:            core.DefaultTokenHolder,
 		SystemConfig:           SystemConfig,
+		DigitalIdentityConfig:  DigitalIdentityConfig,
 		InitialParameters:      initParams,
 		ImmutableParameters:    core.NewImmutChainParams(),
 		InitialTimestamp:       InitialTimestamp(initParams.MediatorInterval),
@@ -309,17 +275,34 @@ func DefaultTestnetGenesisBlock() *core.Genesis {
 		DepositAmountForMediator:  core.DefaultDepositAmountForMediator,
 		DepositAmountForDeveloper: core.DefaultDepositAmountForDeveloper,
 		DepositPeriod:             core.DefaultDepositPeriod,
+		UccMemory:core.DefaultUccMemory,
+		UccMemorySwap:core.DefaultUccMemorySwap,
+		UccCpuShares:core.DefaultUccCpuShares,
+		UccCpuPeriod:core.DefaultCpuPeriod,
+		UccCpuQuota:core.DefaultUccCpuQuota,
+		UccCpuSetCpus:core.DefaultUccCpuSetCpus,
+		TempUccMemory:core.DefaultTempUccMemory,
+		TempUccMemorySwap:core.DefaultTempUccMemorySwap,
+		TempUccCpuShares:core.DefaultTempUccCpuShares,
+		TempUccCpuQuota:core.DefaultTempUccCpuQuota,
 	}
 
+	DigitalIdentityConfig := core.DigitalIdentityConfig{
+		// default root ca holder, 默认是基金会地址
+		RootCAHolder: core.DefaultFoundationAddress,
+		RootCABytes:  core.DefaultRootCABytes,
+	}
 	initParams := core.NewChainParams()
 
 	return &core.Genesis{
-		Version:                configure.Version,
-		TokenAmount:            core.DefaultTokenAmount,
-		TokenDecimal:           core.DefaultTokenDecimal,
+		Version:     configure.Version,
+		TokenAmount: core.DefaultTokenAmount,
+		//TokenDecimal:           core.DefaultTokenDecimal,
+		ParentUnitHeight:       -1,
 		ChainID:                1,
 		TokenHolder:            core.DefaultTokenHolder,
 		SystemConfig:           SystemConfig,
+		DigitalIdentityConfig:  DigitalIdentityConfig,
 		InitialParameters:      initParams,
 		ImmutableParameters:    core.NewImmutChainParams(),
 		InitialTimestamp:       InitialTimestamp(initParams.MediatorInterval),

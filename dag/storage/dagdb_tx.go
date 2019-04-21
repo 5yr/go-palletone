@@ -207,55 +207,45 @@ func (dagdb *DagDb) saveReqIdByTx(tx *modules.Transaction) error {
 
 // GetTransaction retrieves a specific transaction from the database , along with its added positional metadata
 // p2p 同步区块 分为同步header 和body。 GetBody可以省掉节点包装交易块的过程。
-func (dagdb *DagDb) GetTransaction(hash common.Hash) (*modules.Transaction, common.Hash, uint64, uint64) {
-	unitHash, unitNumber, txIndex, err1 := dagdb.GetTxLookupEntry(hash)
-	if err1 != nil {
-		log.Info("dag db GetTransaction,GetTxLookupEntry failed.", "error", err1, "tx_hash:", hash)
-		return nil, unitHash, unitNumber, txIndex
-	}
-	tx, err := dagdb.gettrasaction(hash)
-	if err != nil {
-		log.Info("gettrasaction error:", err.Error())
-		return nil, unitHash, unitNumber, txIndex
-	}
-	return tx, unitHash, unitNumber, txIndex
-}
+//func (dagdb *DagDb) GetTransaction(hash common.Hash) (*modules.TransactionWithUnitInfo, error) {
+//	unitHash, unitNumber, txIndex, err1 := dagdb.GetTxLookupEntry(hash)
+//	if err1 != nil {
+//		log.Info("dag db GetTransaction,GetTxLookupEntry failed.", "error", err1, "tx_hash:", hash)
+//		return nil, err1
+//	}
+//	tx, err := dagdb.GetTransactionOnly(hash)
+//	if err != nil {
+//		log.Info("GetTransactionOnly error:", err.Error())
+//		return nil, err
+//	}
+//	resultTx := modules.TransactionWithUnitInfo{Transaction: tx, UnitHash: unitHash, UnitHeight: unitNumber, TxIndex: txIndex}
+//	return resultTx, nil
+//}
 
-// gettrasaction can get a transaction by hash.
-func (dagdb *DagDb) gettrasaction(hash common.Hash) (*modules.Transaction, error) {
+// GetTransactionOnly can get a transaction by hash.
+func (dagdb *DagDb) GetTransactionOnly(hash common.Hash) (*modules.Transaction, error) {
 	if hash == (common.Hash{}) {
 		return nil, errors.New("hash is not exist.")
 	}
 	tx := new(modules.Transaction)
 	key := append(constants.TRANSACTION_PREFIX, hash.Bytes()...)
 	err := retrieve(dagdb.db, key, tx)
-	//data, err := getString(dagdb.db, []byte(key))
 	if err != nil {
-		log.Error("get transaction failed......", "error", err)
+		log.Warn("get transaction failed.", "tx_hash", hash.String(), "error", err)
 		return nil, err
 	}
 	return tx, nil
-	//if err := json.Unmarshal([]byte(data), &tx); err != nil {
-	//	log.Error("tx Unmarshal failed......", "error", err, "data:", data)
-	//	return nil, err
-	//}
-	// TODO ---- 将不同msg‘s app 反序列化后赋值给payload interface{}.
-	//log.Debug("================== transaction_info======================", "error", err, "transaction_info", tx)
-	//msgs, err1 := ConvertMsg(tx)
-	//if err1 != nil {
-	//	log.Error("tx comvertmsg failed......", "err:", err1, "tx:", tx)
-	//	return nil, err1
-	//}
-	//
-	//tx.TxMessages = msgs
-	//return tx, err
 }
 
-//func (dagdb *DagDb) GetReqIdByTxHash(hash common.Hash) (common.Hash, error) {
-//	key := fmt.Sprintf("%s_%s", string(constants.TxHash2ReqPrefix), hash.String())
-//	str, err := GetString(dagdb.db, key)
-//	return common.HexToHash(str), err
-//}
+func (dagdb *DagDb) IsTransactionExist(hash common.Hash) bool {
+	key := append(constants.TRANSACTION_PREFIX, hash.Bytes()...)
+	exist, err := dagdb.db.Has(key)
+	if err != nil {
+		log.Errorf("Check tx is exist throw error:%s", err.Error())
+		return false
+	}
+	return exist
+}
 
 func (dagdb *DagDb) GetTxHashByReqId(reqid common.Hash) (common.Hash, error) {
 	key := append(constants.ReqIdPrefix, reqid.Bytes()...)
@@ -268,13 +258,14 @@ func (dagdb *DagDb) GetTxHashByReqId(reqid common.Hash) (common.Hash, error) {
 
 	return txid, err
 }
-func (dagdb *DagDb) GetTransactionByHash(hash common.Hash) (*modules.Transaction, common.Hash, error) {
-	unitHash, _, _, err := dagdb.GetTxLookupEntry(hash)
-	if err != nil {
-		log.Info("dag db GetTransaction,GetTxLookupEntry failed.", "error", err, "tx_hash:", hash)
-		return nil, unitHash, err
-	}
 
-	tx, err1 := dagdb.gettrasaction(hash)
-	return tx, unitHash, err1
-}
+//func (dagdb *DagDb) GetTransactionByHash(hash common.Hash) (*modules.Transaction, common.Hash, error) {
+//	unitHash, _, _, err := dagdb.GetTxLookupEntry(hash)
+//	if err != nil {
+//		log.Info("dag db GetTransaction,GetTxLookupEntry failed.", "error", err, "tx_hash:", hash)
+//		return nil, unitHash, err
+//	}
+//
+//	tx, err1 := dagdb.GetTransactionOnly(hash)
+//	return tx, unitHash, err1
+//}

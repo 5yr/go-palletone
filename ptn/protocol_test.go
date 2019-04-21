@@ -19,9 +19,9 @@ package ptn
 import (
 	bytes2 "bytes"
 	"fmt"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/palletone/go-palletone/common"
 	"github.com/palletone/go-palletone/common/p2p"
-	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/palletone/go-palletone/dag/modules"
 	"github.com/palletone/go-palletone/ptn/downloader"
 	"sync"
@@ -36,7 +36,7 @@ func testStatusMsgErrors(t *testing.T, protocol int) {
 	pm, _ := newTestProtocolManagerMust(t, downloader.FullSync, 0, nil, nil, nil, nil)
 	var (
 		genesis, _ = pm.dag.GetGenesisUnit()
-		head       = pm.dag.CurrentHeader()
+		head       = pm.dag.CurrentHeader(modules.PTNCOIN)
 		index      = head.Number
 	)
 	defer pm.Stop()
@@ -175,12 +175,12 @@ func TestGetBlockHeadersDataEncodeDecode(t *testing.T) {
 		fail   bool
 	}{
 		//Providing the origin as either a hash or a number should both work
-		{fail: false, packet: &getBlockHeadersData{Origin: hashOrNumber{Number: modules.ChainIndex{modules.IDType16{}, true, 1}}}},
-		{fail: false, packet: &getBlockHeadersData{Origin: hashOrNumber{Hash: hash, Number: modules.ChainIndex{modules.IDType16{}, true, 2}}}},
+		{fail: false, packet: &getBlockHeadersData{Origin: hashOrNumber{Number: modules.ChainIndex{modules.AssetId{}, true, 1}}}},
+		{fail: false, packet: &getBlockHeadersData{Origin: hashOrNumber{Hash: hash, Number: modules.ChainIndex{modules.AssetId{}, true, 2}}}},
 
 		// Providing arbitrary query field should also work
-		{fail: false, packet: &getBlockHeadersData{Origin: hashOrNumber{Number: modules.ChainIndex{modules.IDType16{}, true, 3}}, Amount: 314, Skip: 1, Reverse: true}},
-		{fail: false, packet: &getBlockHeadersData{Origin: hashOrNumber{Hash: hash, Number: modules.ChainIndex{modules.IDType16{}, true, 4}}, Amount: 314, Skip: 1, Reverse: true}},
+		{fail: false, packet: &getBlockHeadersData{Origin: hashOrNumber{Number: modules.ChainIndex{modules.AssetId{}, true, 3}}, Amount: 314, Skip: 1, Reverse: true}},
+		{fail: false, packet: &getBlockHeadersData{Origin: hashOrNumber{Hash: hash, Number: modules.ChainIndex{modules.AssetId{}, true, 4}}, Amount: 314, Skip: 1, Reverse: true}},
 	}
 	// Iterate over each of the tests and try to encode and then decode
 	for i, tt := range tests {

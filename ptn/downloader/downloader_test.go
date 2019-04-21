@@ -75,8 +75,8 @@ func newGenesisForTest(db ptndb.Database) *modules.Unit {
 	header.Number.IsMain = true
 	header.Number.Index = 0
 	//
-	header.Creationdate = time.Now().Unix()
-	header.Authors = modules.Authentifier{common.Address{}, []byte{}, []byte{}, []byte{}}
+	header.Time = time.Now().Unix()
+	header.Authors = modules.Authentifier{[]byte{}, []byte{}}
 	header.GroupSign = []byte{}
 	header.GroupPubKey = []byte{}
 	tx, _ := NewCoinbaseTransaction()
@@ -127,8 +127,8 @@ func newDag(db ptndb.Database, gunit *modules.Unit, number int, seed byte) (modu
 		header.Number.IsMain = par.UnitHeader.Number.IsMain
 		header.Number.Index = par.UnitHeader.Number.Index + 1
 		//
-		header.Creationdate = time.Now().Unix()
-		header.Authors = modules.Authentifier{common.Address{seed}, []byte{}, []byte{}, []byte{}}
+		header.Time = time.Now().Unix()
+		header.Authors = modules.Authentifier{[]byte{}, []byte{}}
 		header.GroupSign = []byte{}
 		header.GroupPubKey = []byte{}
 		tx, _ := NewCoinbaseTransaction()
@@ -324,6 +324,9 @@ func (dl *downloadTester) makeChainFork(n, f int, parent *modules.Unit, balanced
 func (dl *downloadTester) terminate() {
 	dl.downloader.Terminate()
 }
+func (dl *downloadTester) InsertLightHeader(headers []*modules.Header) (int, error) {
+	return len(headers), nil
+}
 
 func (dl *downloadTester) GetUnitByHash(hash common.Hash) (*modules.Unit, error) {
 	return &modules.Unit{}, nil
@@ -368,7 +371,7 @@ func (dl *downloadTester) HasBlock(hash common.Hash, number uint64) bool {
 	return u != nil
 }
 
-// GetHeader retrieves a header from the testers canonical chain.
+// GetHeaderByHash retrieves a header from the testers canonical chain.
 func (dl *downloadTester) GetHeaderByHash(hash common.Hash) (*modules.Header, error) {
 	dl.lock.RLock()
 	defer dl.lock.RUnlock()
@@ -385,7 +388,7 @@ func (dl *downloadTester) GetUnit(hash common.Hash) (*modules.Unit, error) {
 }
 
 // CurrentHeader retrieves the current head header from the canonical chain.
-func (dl *downloadTester) CurrentHeader() *modules.Header {
+func (dl *downloadTester) CurrentHeader(token modules.AssetId) *modules.Header {
 	dl.lock.RLock()
 	defer dl.lock.RUnlock()
 
@@ -398,7 +401,7 @@ func (dl *downloadTester) CurrentHeader() *modules.Header {
 }
 
 // CurrentBlock retrieves the current head block from the canonical chain.
-func (dl *downloadTester) CurrentUnit() *modules.Unit {
+func (dl *downloadTester) CurrentUnit(token modules.AssetId) *modules.Unit {
 	dl.lock.RLock()
 	defer dl.lock.RUnlock()
 
@@ -659,7 +662,7 @@ func (dlp *downloadTesterPeer) waitDelay() {
 //}
 // Head constructs a function to retrieve a peer's current head hash and total difficulty.
 //头构造一个函数来检索对等点的当前头哈希值和总难度。
-func (dlp *downloadTesterPeer) Head(assetId modules.IDType16) (common.Hash, *modules.ChainIndex) {
+func (dlp *downloadTesterPeer) Head(assetId modules.AssetId) (common.Hash, *modules.ChainIndex) {
 	dlp.dl.lock.RLock()
 	defer dlp.dl.lock.RUnlock()
 	index := &modules.ChainIndex{
@@ -1424,7 +1427,9 @@ func testInvalidHeaderRollback(t *testing.T, protocol int, mode SyncMode) {
 
 	// Create a small enough block chain to download
 	targetBlocks := 3*fsHeaderSafetyNet + 256 + fsMinFullBlocks
-	hashes, headers, blocks := tester.makeChain(targetBlocks, 0, tester.genesis, false)
+	genesis := tester.genesis
+	token := genesis.Number().AssetID
+	hashes, headers, blocks := tester.makeChain(targetBlocks, 0, genesis, false)
 
 	// Attempt to sync with an attacker that feeds junk during the fast sync phase.
 	// This should result in the last fsHeaderSafetyNet headers being rolled back.
@@ -1435,7 +1440,7 @@ func testInvalidHeaderRollback(t *testing.T, protocol int, mode SyncMode) {
 	if err := tester.sync("fast-attack", 0, mode); err == nil {
 		t.Fatalf("succeeded fast attacker synchronisation")
 	}
-	if head := tester.CurrentHeader().Number.Index; int(head) > MaxHeaderFetch {
+	if head := tester.CurrentHeader(token).Number.Index; int(head) > MaxHeaderFetch {
 		t.Errorf("rollback head mismatch: have %v, want at most %v", head, MaxHeaderFetch)
 	}
 	// Attempt to sync with an attacker that feeds junk during the block import phase.
@@ -1449,11 +1454,11 @@ func testInvalidHeaderRollback(t *testing.T, protocol int, mode SyncMode) {
 	if err := tester.sync("block-attack", 0, mode); err == nil {
 		t.Fatalf("succeeded block attacker synchronisation")
 	}
-	if head := tester.CurrentHeader().Number.Index; int(head) > 2*fsHeaderSafetyNet+MaxHeaderFetch {
+	if head := tester.CurrentHeader(token).Number.Index; int(head) > 2*fsHeaderSafetyNet+MaxHeaderFetch {
 		t.Errorf("rollback head mismatch: have %v, want at most %v", head, 2*fsHeaderSafetyNet+MaxHeaderFetch)
 	}
 	if mode == FastSync {
-		if head := tester.CurrentUnit().NumberU64(); head != 0 {
+		if head := tester.CurrentUnit(token).NumberU64(); head != 0 {
 			t.Errorf("fast sync pivot block #%d not rolled back", head)
 		}
 	}
@@ -1473,11 +1478,11 @@ func testInvalidHeaderRollback(t *testing.T, protocol int, mode SyncMode) {
 	if err := tester.sync("withhold-attack", 0, mode); err == nil {
 		t.Fatalf("succeeded withholding attacker synchronisation")
 	}
-	if head := tester.CurrentHeader().Number.Index; int(head) > 2*fsHeaderSafetyNet+MaxHeaderFetch {
+	if head := tester.CurrentHeader(token).Number.Index; int(head) > 2*fsHeaderSafetyNet+MaxHeaderFetch {
 		t.Errorf("rollback head mismatch: have %v, want at most %v", head, 2*fsHeaderSafetyNet+MaxHeaderFetch)
 	}
 	if mode == FastSync {
-		if head := tester.CurrentUnit().NumberU64(); head != 0 {
+		if head := tester.CurrentUnit(token).NumberU64(); head != 0 {
 			t.Errorf("fast sync pivot block #%d not rolled back", head)
 		}
 	}
@@ -1923,7 +1928,7 @@ type floodingTestPeer struct {
 	pend   sync.WaitGroup
 }
 
-func (ftp *floodingTestPeer) Head(assetId modules.IDType16) (common.Hash, *modules.ChainIndex) {
+func (ftp *floodingTestPeer) Head(assetId modules.AssetId) (common.Hash, *modules.ChainIndex) {
 	return ftp.peer.Head(assetId)
 }
 func (ftp *floodingTestPeer) RequestHeadersByHash(hash common.Hash, count int, skip int, reverse bool) error {

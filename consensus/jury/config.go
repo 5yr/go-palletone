@@ -1,15 +1,33 @@
+/*
+	This file is part of go-palletone.
+	go-palletone is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 3 of the License, or
+	(at your option) any later version.
+	go-palletone is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
+	You should have received a copy of the GNU General Public License
+	along with go-palletone.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
+/*
+ * @author PalletOne core developers <dev@pallet.one>
+ * @date 2018
+ */
 package jury
 
 import (
-	"github.com/palletone/go-palletone/common"
-	"github.com/palletone/go-palletone/core"
 	"gopkg.in/urfave/cli.v1"
+
+	"github.com/palletone/go-palletone/common"
 )
 
 const (
-	DefaultContractSigNum = 3
+	DefaultContractSigNum = 2
+	DefaultElectionNum    = 2
 	DefaultPassword       = "password"
-	DefaultInitPartSec    = "47gsj9pK3pwYUS1ZrWQjTgWMHUXWdNuCr7hXPXHySyBk"
 )
 
 var (
@@ -28,25 +46,36 @@ type JuryAccount struct {
 	Password string
 }
 type Config struct {
-	ContractSigNum int
+	ContractSigNum int            //user contract jury sig number
+	ElectionNum    int            //vrf election jury number
 	Accounts       []*AccountConf // the set of the mediator info
 }
 
 func (aConf *AccountConf) configToAccount() *JuryAccount {
 	addr, _ := common.StringToAddress(aConf.Address)
-
-	medAcc := &JuryAccount{
-		addr,
-		aConf.Password,
+	if addr != (common.Address{}){
+		medAcc := &JuryAccount{
+			addr,
+			aConf.Password,
+		}
+		return medAcc
 	}
-	return medAcc
+	return nil
 }
 
 var DefaultConfig = Config{
 	ContractSigNum: DefaultContractSigNum,
+	ElectionNum:    DefaultElectionNum,
 	Accounts: []*AccountConf{
-		&AccountConf{core.DefaultJuryAddr, DefaultPassword},
+		//&AccountConf{core.DefaultJuryAddr, DefaultPassword},
+		&AccountConf{},
 	},
+}
+
+func MakeConfig() Config {
+	cfg := DefaultConfig
+	cfg.Accounts = nil
+	return cfg
 }
 
 func SetJuryConfig(ctx *cli.Context, cfg *Config) {

@@ -69,7 +69,7 @@ func createUnit() (*modules.Unit, error) {
 	txs := modules.Transactions{tx}
 	// new unit
 
-	unit, err := dagcomm.NewGenesisUnit(txs, 1536451201, asset)
+	unit, err := dagcomm.NewGenesisUnit(txs, 1536451201, asset, -1, common.Hash{})
 	log.Info("create unit success.", "error", err, "hash", unit.Hash().String())
 	return unit, err
 }
@@ -142,9 +142,8 @@ func newHeader() *modules.Header {
 
 	h.TxRoot = h.Hash()
 	sig, _ := crypto.Sign(h.TxRoot[:], key)
-	au.R = sig[:32]
-	au.S = sig[32:64]
-	au.V = sig[64:]
+	au.Signature = sig
+	au.PubKey = crypto.CompressPubkey(&key.PublicKey)
 	h.Authors = au
 	return h
 }

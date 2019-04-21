@@ -29,6 +29,7 @@ import (
 	"github.com/palletone/go-palletone/common/log"
 	"github.com/palletone/go-palletone/common/p2p/discover"
 	"github.com/palletone/go-palletone/core"
+	"github.com/palletone/go-palletone/dag/dagconfig"
 	"github.com/palletone/go-palletone/dag/modules"
 )
 
@@ -132,7 +133,7 @@ func (d *Dag) GetActiveMediatorNode(index int) *discover.Node {
 
 // author Albert·Gou
 func (d *Dag) GetActiveMediator(add common.Address) *core.Mediator {
-	if !d.GetGlobalProp().IsActiveMediator(add) {
+	if !d.IsActiveMediator(add) {
 		log.Debug(fmt.Sprintf("%v is not active mediator!", add.Str()))
 		return nil
 	}
@@ -171,12 +172,14 @@ func (dag *Dag) GetScheduledMediator(slotNum uint32) common.Address {
 }
 
 func (dag *Dag) HeadUnitTime() int64 {
-	t, _ := dag.propRep.GetNewestUnitTimestamp(modules.PTNCOIN)
+	gasToken := dagconfig.DagConfig.GetGasToken()
+	t, _ := dag.propRep.GetNewestUnitTimestamp(gasToken)
 	return t
 }
 
 func (dag *Dag) HeadUnitNum() uint64 {
-	_, idx, _ := dag.propRep.GetNewestUnit(modules.PTNCOIN)
+	gasToken := dagconfig.DagConfig.GetGasToken()
+	_, idx, _ := dag.propRep.GetNewestUnit(gasToken)
 	return idx.Index
 }
 
@@ -185,7 +188,8 @@ func (dag *Dag) LastMaintenanceTime() int64 {
 }
 
 func (dag *Dag) HeadUnitHash() common.Hash {
-	hash, _, _ := dag.propRep.GetNewestUnit(modules.PTNCOIN)
+	gasToken := dagconfig.DagConfig.GetGasToken()
+	hash, _, _ := dag.propRep.GetNewestUnit(gasToken)
 	return hash
 }
 
@@ -213,12 +217,17 @@ func (dag *Dag) CurrentFeeSchedule() core.FeeSchedule {
 	return dag.GetGlobalProp().ChainParameters.CurrentFees
 }
 
+func (dag *Dag) GetChainParameters() core.ChainParameters {
+	return dag.GetGlobalProp().ChainParameters
+}
+
+func (dag *Dag) GetImmutableChainParameters() core.ImmutableChainParameters {
+	return dag.GetGlobalProp().ImmutableParameters
+}
+
 func (dag *Dag) GetUnitByHash(hash common.Hash) (*modules.Unit, error) {
-	//先判断Unit是否在Memdag中，如果在则直接返还，不在才去Leveldb查询
+
 	unit, err := dag.unstableUnitRep.GetUnit(hash)
-	if err != nil && dag.Memdag != nil {
-		unit, err = dag.unstableUnitRep.GetUnit(hash)
-	}
 
 	if err != nil {
 		log.Debug("get unit by hash is failed.", "hash", hash)
@@ -240,13 +249,13 @@ func (d *Dag) GetPrecedingMediatorNodes() map[string]*discover.Node {
 	return nodes
 }
 
-func (d *Dag) GetVotedMediator(addr common.Address) map[common.Address]bool {
+func (d *Dag) GetAccountInfo(addr common.Address) *modules.AccountInfo {
 	accountInfo, err := d.unstableStateRep.RetrieveAccountInfo(addr)
 	if err != nil {
 		accountInfo = modules.NewAccountInfo()
 	}
 
-	return accountInfo.VotedMediators
+	return accountInfo
 }
 
 func (d *Dag) LookupAccount() map[common.Address]*modules.AccountInfo {
@@ -254,12 +263,7 @@ func (d *Dag) LookupAccount() map[common.Address]*modules.AccountInfo {
 }
 
 func (d *Dag) GetPtnBalance(addr common.Address) uint64 {
-	accountInfo, err := d.unstableStateRep.RetrieveAccountInfo(addr)
-	if err != nil {
-		accountInfo = modules.NewAccountInfo()
-	}
-
-	return accountInfo.PtnBalance
+	return d.unstableStateRep.GetAccountBalance(addr)
 }
 
 func (d *Dag) GetMediatorInfo(address common.Address) *modules.MediatorInfo {
@@ -267,10 +271,22 @@ func (d *Dag) GetMediatorInfo(address common.Address) *modules.MediatorInfo {
 	return mi
 }
 
-func (d *Dag) IsActiveJury(add common.Address) bool {
-	return d.GetGlobalProp().IsActiveJury(add)
+func (d *Dag) JuryCount() int {
+	return 100 //todo test
+
+	juryList, err := d.unstableStateRep.GetJuryCandidateList()
+	if err != nil {
+		return len(juryList)
+	}
+	return 0
 }
 
 func (d *Dag) GetActiveJuries() []common.Address {
-	return d.GetGlobalProp().GetActiveJuries()
+	return nil
+	//return d.unstableStateRep.GetJuryCandidateList()
+}
+
+func (d *Dag) IsActiveJury(addr common.Address) bool {
+	return true //todo for test
+	return d.unstableStateRep.IsJury(addr)
 }

@@ -57,8 +57,11 @@ const (
 	VSSResponseMsg     = 0x0b
 	SigShareMsg        = 0x0c
 	GroupSigMsg        = 0x0d
+	GetLeafNodesMsg    = 0x0e
+	LeafNodesMsg       = 0x0f
 	ContractMsg        = 0x10
 	ElectionMsg        = 0x11
+	AdapterMsg         = 0x12
 
 	GetNodeDataMsg = 0x20
 	NodeDataMsg    = 0x21
@@ -135,13 +138,12 @@ type txPool interface {
 	Content() (map[common.Hash]*modules.Transaction, map[common.Hash]*modules.Transaction)
 	Get(hash common.Hash) (*modules.TxPoolTransaction, common.Hash)
 	GetPoolTxsByAddr(addr string) ([]*modules.TxPoolTransaction, error)
-	GetNonce(hash common.Hash) uint64
-	Stats() (int, int)
+	Stats() (int, int, int)
 	GetSortedTxs(hash common.Hash) ([]*modules.TxPoolTransaction, common.StorageSize)
 	SendStoredTxs(hashs []common.Hash) error
 	DiscardTxs(hashs []common.Hash) error
 	//DiscardTx(hash common.Hash) error
-
+	GetUtxoEntry(outpoint *modules.OutPoint) (*modules.Utxo, error)
 	AddRemote(tx *modules.Transaction) error
 	AddRemotes([]*modules.Transaction) []error
 	ProcessTransaction(tx *modules.Transaction, allowOrphan bool, rateLimit bool, tag txspool.Tag) ([]*txspool.TxDesc, error)
@@ -184,6 +186,8 @@ type hashOrNumber struct {
 	Hash   common.Hash // Block hash from which to retrieve headers (excludes Number)
 	Number modules.ChainIndex
 }
+
+type leafNodes []*modules.Header
 
 /*
 // EncodeRLP is a specialized encoder for hashOrNumber to encode only one of the

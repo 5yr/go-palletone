@@ -19,51 +19,274 @@
 package jury
 
 import (
-	alg "github.com/palletone/go-palletone/consensus/jury/algorithm"
+	"crypto/ecdsa"
+	"fmt"
+	"time"
+
 	"github.com/palletone/go-palletone/dag/errors"
 	"github.com/palletone/go-palletone/common"
-	"crypto/rand"
 	"github.com/palletone/go-palletone/common/log"
 	"github.com/palletone/go-palletone/common/util"
-	"github.com/palletone/go-palletone/consensus/jury/vrf"
-	"time"
+	"github.com/palletone/go-palletone/consensus/jury/vrfEc"
+	"github.com/palletone/go-palletone/consensus/jury/vrfEs"
+	"github.com/palletone/go-palletone/core/accounts/keystore"
+	"github.com/palletone/go-palletone/core/accounts"
+	alg "github.com/palletone/go-palletone/consensus/jury/algorithm"
+	"github.com/palletone/go-palletone/dag/modules"
 )
 
-type elector struct {
-	num    int
-	weight uint64
-	total  uint64
-
-	privkey alg.PrivateKey
-	pubkey  alg.PublicKey
+type vrfAccount struct {
+	pubKey *ecdsa.PublicKey  //vrfEc
+	priKey *ecdsa.PrivateKey //vrfEc
 }
 
-func (p *Processor) ElectionRequest(reqId common.Hash) error {
-	return nil //todo
+type elector struct {
+	num    uint
+	weight uint64
+	total  uint64
+	vrfAct vrfAccount //vrf ec
+
+	addr     common.Address
+	password string
+	ks       *keystore.KeyStore
+}
+
+func (e *elector) checkElectedEc(data []byte) (proof []byte, err error) {
+	if e.num < 0 || e.weight < 1 || data == nil {
+		errs := fmt.Sprintf("checkElected param error, num[%d], weight[%d]", e.num, e.weight)
+		return nil, errors.New(errs)
+	}
+	proof, err = vrfEc.VrfProve(e.vrfAct.priKey, data)
+	if err != nil {
+		return nil, err
+	}
+	vrfValue := vrfEc.VrfProof2Value(e.vrfAct.priKey.Params(), proof)
+	if len(vrfValue) > 0 {
+		if alg.Selected(e.num, e.weight, uint64(e.total), vrfValue) > 0 {
+			return proof, nil
+		}
+	}
+	return nil, nil
+}
+
+func (e *elector) checkElected(data []byte) (proof []byte, err error) {
+	if e.num < 0 || e.weight < 1 || data == nil {
+		errs := fmt.Sprintf("checkElected param error, num[%d], weight[%d]", e.num, e.weight)
+		return nil, errors.New(errs)
+	}
+	a := accounts.Account{
+		Address: e.addr,
+	}
+	privateKey, err := e.ks.DumpPrivateKey(a, e.password)
+	if err != nil {
+		return nil, err
+	}
+	proof, err = vrfEs.VrfProve(privateKey, data)
+	if err != nil {
+		return nil, err
+	}
+	vrfValue := proof
+	if len(vrfValue) > 0 {
+		if alg.Selected(e.num, e.weight, uint64(e.total), vrfValue) > 0 {
+			return proof, nil
+		}
+	}
+	return nil, nil
+}
+
+func (e *elector) verifyVrfEc(proof, data []byte) (bool, error) {
+	ok, err := vrfEc.VrfVerify(e.vrfAct.pubKey, data, proof)
+	if err != nil {
+		return false, err
+	}
+	if ok {
+		vrfValue := vrfEc.VrfProof2Value(e.vrfAct.pubKey.Params(), proof)
+		if len(vrfValue) > 0 {
+			if alg.Selected(e.num, e.weight, uint64(e.total), vrfValue) > 0 {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func (e *elector) verifyVrf(proof, data []byte, pubKey []byte) (bool, error) {
+	ok, err := vrfEs.VrfVerify(pubKey, data, proof)
+	if err != nil {
+		log.Error("verifyVrf fail", "ok?", ok)
+		return false, err
+	}
+	if ok {
+		vrfValue := proof
+		if len(vrfValue) > 0 {
+			if alg.Selected(e.num, e.weight, uint64(e.total), vrfValue) > 0 {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func (p *Processor) electionEventIsProcess(event *ElectionEvent, addr *common.Address) bool {
+	if event == nil {
+		return false
+	}
+	reqId := common.Hash{}
+	switch event.EType {
+	case ELECTION_EVENT_REQUEST:
+		reqId = event.Event.(*ElectionRequestEvent).ReqId
+	case ELECTION_EVENT_RESULT:
+		reqId = event.Event.(*ElectionResultEvent).ReqId
+	}
+	//request node
+	if _, ok := p.mel[reqId]; ok && p.mel[reqId].eChan != nil {
+		return true
+	}
+	//jury node
+	if p.isLocalActiveJury(*addr) {
+		return true
+	}
+	return false
+}
+func (p *Processor) electionEventBroadcast(event *ElectionEvent) (recved bool, err error) {
+	if event == nil {
+		return false, errors.New("electionEventBroadcast event is nil")
+	}
+	p.locker.Lock()
+	defer p.locker.Unlock()
+
+	switch event.EType {
+	case ELECTION_EVENT_REQUEST:
+		evt := event.Event.(*ElectionRequestEvent)
+		if e, ok := p.mel[evt.ReqId]; ok {
+			if e.req {
+				return true, nil
+			} else {
+				e.req = true
+			}
+		} else {
+			p.mel[evt.ReqId] = &electionVrf{}
+			p.mel[evt.ReqId].req = true
+			p.mel[evt.ReqId].tm = time.Now()
+		}
+	case ELECTION_EVENT_RESULT:
+		evt := event.Event.(*ElectionResultEvent)
+		if e, ok := p.mel[evt.ReqId]; ok {
+			for _, a := range e.rst {
+				if a == evt.Ele.AddrHash {
+					return true, nil
+				}
+			}
+			e.rst = append(e.rst, evt.Ele.AddrHash)
+		} else {
+			p.mel[evt.ReqId] = &electionVrf{rst: make([]common.Hash, 0)}
+			p.mel[evt.ReqId].rst = append(p.mel[evt.ReqId].rst, evt.Ele.AddrHash)
+			p.mel[evt.ReqId].tm = time.Now()
+		}
+	}
+	go p.ptn.ElectionBroadcast(*event)
+	return false, nil
+}
+
+func (p *Processor) processElectionRequestEvent(ele *elector, reqEvt *ElectionRequestEvent) (result *ElectionEvent, err error) {
+	//产生vrf证明
+	//计算二项式分步，确定自己是否选中
+	//如果选中，则对请求结果返回
+	if len(p.local) < 1 {
+		return nil, errors.New("ProcessElectionRequestEvent, local jury addr is nil")
+	}
+	addr := common.Address{}
+	addrHash := common.Hash{}
+	for addr, _ = range p.local {
+		addrHash = util.RlpHash(addr)
+		break //only first one
+	}
+	proof, err := ele.checkElected(conversionElectionSeedData(reqEvt.ReqId[:]))
+	if err != nil {
+		log.Error("ProcessElectionRequestEvent", "reqHash", reqEvt.ReqId, "checkElected err", err)
+		return nil, err
+	}
+	pubKey, err := p.ptn.GetKeyStore().GetPublicKey(addr)
+	if err != nil {
+		log.Error("ProcessElectionRequestEvent", "get pubKey err, address:", addr)
+		return nil, err
+	}
+
+	if proof != nil {
+		rstEvt := &ElectionResultEvent{
+			ReqId: reqEvt.ReqId,
+			Ele:   modules.ElectionInf{AddrHash: addrHash, Proof: proof, PublicKey: pubKey},
+		}
+		log.Debug("ProcessElectionRequestEvent", "ok, reqId", reqEvt.ReqId.String())
+		evt := &ElectionEvent{EType: ELECTION_EVENT_RESULT, Event: rstEvt}
+		return evt, nil
+	}
+	return nil, nil
+}
+
+func (p *Processor) processElectionResultEvent(ele *elector, rstEvt *ElectionResultEvent) error {
+	//验证vrf证明
+	//收集vrf地址并添加缓存
+	//检查缓存地址数量
+	if _, ok := p.mtx[rstEvt.ReqId]; !ok {
+		return errors.New("ProcessElectionResultEvent, reqHash not find")
+	}
+	mel := p.mel[rstEvt.ReqId]
+	if mel.eChan == nil {
+		//not request node
+		return nil
+	}
+	if len(mel.eInf) >= p.electionNum {
+		log.Info("ProcessElectionResultEvent, The quantity has reached the requirement")
+		return nil
+	}
+	log.Info("ProcessElectionResultEvent", "reqHash", rstEvt.ReqId.String(), "addrHash", rstEvt.Ele.AddrHash.String())
+
+	tmpReqId := common.BytesToAddress(rstEvt.ReqId.Bytes())
+	contractId := common.NewAddress(tmpReqId.Bytes(), common.ContractHash)
+	log.Debug("ProcessElectionResultEvent", "reqId", rstEvt.ReqId.Bytes(), "reqIdStr", rstEvt.ReqId.String(), "contractId", contractId, "tmpReqId", tmpReqId)
+	log.Debug("ProcessElectionResultEvent", "contractIdBytes", contractId.Bytes(), "contractIdStr", contractId.String())
+
+	ok, err := ele.verifyVrf(rstEvt.Ele.Proof, conversionElectionSeedData(rstEvt.ReqId[:]), rstEvt.Ele.PublicKey) //rstEvt.ReqId[:]
+	if err != nil {
+		log.Error("ProcessElectionResultEvent", "verify VRF fail, ReqId is", rstEvt.ReqId.Bytes())
+		return err
+	}
+	if ok {
+		p.locker.Lock()
+		mel.eInf = append(mel.eInf, rstEvt.Ele)
+		p.lockArf[contractId] = append(p.lockArf[contractId], rstEvt.Ele) //add lock vrf election info
+		p.locker.Unlock()
+		if len(mel.eInf) >= p.electionNum {
+			//通知接收数量达到要求
+			log.Info("ProcessElectionResultEvent,VRF address number is enough, Ok", "contractId", contractId)
+			mel.eChan <- true
+		}
+	}
+	return nil
+}
+
+func (p *Processor) ElectionRequest(reqId common.Hash, timeOut time.Duration) error {
+	//return nil //todo
 
 	if reqId == (common.Hash{}) {
 		return errors.New("ElectionRequest param is nil")
 	}
-	//seedData= reqId + rand
-	rd := make([]byte, 20)
-	_, err := rand.Read(rd)
+	seedData, err := getElectionSeedData(reqId)
 	if err != nil {
-		return errors.New("ElectionRequest rand fail")
+		return err
 	}
-	seedData := make([]byte, len(reqId)+len(rd))
-	copy(seedData, reqId[:])
-	copy(seedData[len(reqId):], rd)
-
-	eleList := electionList{
-		eleChan:  make(chan bool, 1),
-		eleNum:   4, //todo
-		seedData: seedData,
+	p.locker.Lock()
+	p.mel[reqId] = &electionVrf{
+		eChan: make(chan bool, 1),
+		eInf:  make([]modules.ElectionInf, 0),
+		req:   true,
+		tm:    time.Now(),
 	}
-	p.mtx[reqId].eleList = eleList
-	reqEvent := ElectionRequestEvent{
-		reqHash: reqId,
-		num:     eleList.eleNum,
-		data:    eleList.seedData,
+	p.locker.Unlock()
+	reqEvent := &ElectionRequestEvent{
+		ReqId: reqId,
+		//Data:  ele.seedData,
 	}
 	log.Debug("ElectionRequest", "reqId", reqId.String(), "seedData", seedData)
 	go p.ptn.ElectionBroadcast(ElectionEvent{EType: ELECTION_EVENT_REQUEST, Event: reqEvent})
@@ -71,129 +294,59 @@ func (p *Processor) ElectionRequest(reqId common.Hash) error {
 	//超时等待选举结果
 	timeout := make(chan bool, 1)
 	go func() {
-		time.Sleep(time.Second * 5)
+		time.Sleep(timeOut)
 		timeout <- true
 	}()
+
 	select {
-	case <-eleList.eleChan:
+	case <-p.mel[reqId].eChan:
 		log.Debug("ElectionRequest, election Ok")
 		return nil
 	case <-timeout:
 		log.Debug("ElectionRequest, election time out")
+		return errors.New("ElectionRequest, election time out")
 	}
-	return errors.New("ElectionRequest, election time out")
+	return errors.New("ElectionRequest, election fail")
 }
 
-func (e *elector) checkElected(data []byte) (proof []byte, err error) {
-	if e.num < 0 || e.weight < 10 || data == nil {
-		return nil, errors.New("CheckElected param error")
-	}
-	proofHash, proof, err := e.privkey.Evaluate(data)
-	if err != nil {
-		return nil, err
-	}
-	selected := alg.Selected(e.num, e.weight, uint64(e.total), proofHash)
-	if selected > 0 {
-		return proof, nil
-	} else {
-		return nil, nil
-	}
-}
-
-func (e *elector) verifyVRF(proof, data []byte) (bool, error) {
-	ok, err := e.pubkey.VerifyVRF(proof, data)
-	if err != nil {
-		return false, err
-	}
-	if ok {
-		proofHash := vrf.ECVRF_proof2hash(proof)
-		selected := alg.Selected(e.num, e.weight, e.total, proofHash)
-		if selected > 0 {
-			return true, nil
-		} else {
-			return false, nil
-		}
-	}
-	return false, nil
-}
-
-func (p *Processor) ProcessElectionRequestEvent(event *ElectionEvent) (result *ElectionEvent, err error) {
-	//产生vrf证明
-	//计算二项式分步，确定自己是否选中
-	//如果选中，则对请求结果返回
+func (p *Processor) ProcessElectionEvent(event *ElectionEvent) (result *ElectionEvent, err error) {
 	if event == nil {
 		return nil, errors.New("ProcessElectionRequestEvent, event is nil")
 	}
-	if len(p.local) < 1 {
-		return nil, errors.New("ProcessElectionRequestEvent, local jury addr is nil")
+	var account JuryAccount
+	for _, a := range p.local {
+		account.Address = a.Address
+		account.Password = a.Password
+		break //first one
 	}
-	addrHash := common.Hash{}
-	for addr, _ := range p.local {
-		addrHash = util.RlpHash(addr)
-		break //only first one
+	if !p.electionEventIsProcess(event, &account.Address) {
+		log.Info("ProcessElectionEvent", "electionEventIsProcess if false, addr", account.Address, "event type", event.EType)
+		return nil, nil
 	}
-	reqEvt := event.Event.(ElectionRequestEvent)
-	log.Info("ProcessElectionRequestEvent", "reqHash", reqEvt.reqHash.String(), "num", reqEvt.num)
-	ele := elector{
-		num:    reqEvt.num,
-		weight: 10,
-		total:  1000,
-		//privkey:, //todo
-		//pubkey:,  //todo
+	ele := &elector{
+		num:      uint(p.electionNum),
+		total:    uint64(p.dag.JuryCount()), //todo dynamic acquisition
+		addr:     account.Address,
+		password: account.Password,
+		ks:       p.ptn.GetKeyStore(),
+		//vrfAct: p.vrfAct,
 	}
-	proof, err := ele.checkElected(reqEvt.data)
+	ele.weight = electionWeightValue(ele.total)
+	//log.Info("ProcessElectionEvent0", "event", event.EType)
+
+	recved, err := p.electionEventBroadcast(event)
 	if err != nil {
-		log.Error("ProcessElectionRequestEvent", "reqHash", reqEvt.reqHash, "checkElected err", err)
 		return nil, err
+	} else if recved {
+		return nil, nil
 	}
-	if proof != nil {
-		rstEvt := ElectionResultEvent{
-			reqHash:   reqEvt.reqHash,
-			addrHash:  addrHash,
-			proof:     proof,
-			publicKey: ele.pubkey,
-		}
-		log.Debug("ProcessElectionRequestEvent", "reqId", reqEvt.reqHash.String())
-		evt := &ElectionEvent{EType: ELECTION_EVENT_RESULT, Event: rstEvt}
-		return evt, nil
-	}
-	return nil, nil
-}
+	log.Info("===ElectionMsg===", "event ", event)
+	log.Info("ProcessElectionEvent", "event", event.EType)
 
-func (p *Processor) ProcessElectionResultEvent(event *ElectionEvent) error {
-	//验证vrf证明
-	//收集vrf地址并添加缓存
-	//检查缓存地址数量
-	if event == nil {
-		return errors.New("ProcessElectionResultEvent, event is nil")
+	if event.EType == ELECTION_EVENT_REQUEST {
+		return p.processElectionRequestEvent(ele, event.Event.(*ElectionRequestEvent))
+	} else if event.EType == ELECTION_EVENT_RESULT {
+		return nil, p.processElectionResultEvent(ele, event.Event.(*ElectionResultEvent))
 	}
-	rstEvt := event.Event.(ElectionResultEvent)
-	log.Info("ProcessElectionResultEvent", "reqHash", rstEvt.reqHash.String(), "addrHash", rstEvt.addrHash.String())
-	ele := elector{
-		weight: 10,
-		total:  1000,
-		//privkey:, //todo
-		//pubkey:,  //todo
-	}
-	if _, ok := p.mtx[rstEvt.reqHash]; !ok {
-		return errors.New("ProcessElectionResultEvent, reqHash not find")
-	}
-	eList := p.mtx[rstEvt.reqHash].eleList
-	if len(eList.addrHash) > eList.eleNum {
-		log.Info("ProcessElectionResultEvent addrHash num > 3")
-		return nil
-	}
-	ok, err := ele.verifyVRF(rstEvt.proof, eList.seedData)
-	if err != nil {
-		return err
-	}
-	if ok {
-		eList.addrHash = append(eList.addrHash, rstEvt.addrHash)
-		if len(eList.addrHash) > eList.eleNum {
-			//通知接收数量达到要求
-			eList.eleChan <- true
-		}
-	}
-
-	return nil
+	return nil, errors.New("ProcessElectionEvent, fail")
 }

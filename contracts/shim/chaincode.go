@@ -28,17 +28,20 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math/big"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/golang/protobuf/proto"
 	"github.com/golang/protobuf/ptypes/timestamp"
+	"github.com/palletone/go-palletone/common"
 	"github.com/palletone/go-palletone/common/log"
 	"github.com/palletone/go-palletone/contracts/comm"
-	cfg "github.com/palletone/go-palletone/contracts/contractcfg"
 	pb "github.com/palletone/go-palletone/core/vmContractPub/protos/peer"
+	dagConstants "github.com/palletone/go-palletone/dag/constants"
 	"github.com/palletone/go-palletone/dag/modules"
 	"github.com/pkg/errors"
 	"github.com/spf13/viper"
@@ -112,7 +115,8 @@ func userChaincodeStreamGetter(name string) (PeerChaincodeStream, error) {
 		cert = string(data)
 	}
 	flag.Parse()
-	log.Debugf("Peer address: %s", getPeerAddress())
+	//TODO peer
+	log.Debugf("Peer address: %s", viper.GetString("chaincode.peer.address"))
 	// Establish connection with validating peer
 	clientConn, err := newPeerClientConnection()
 	if err != nil {
@@ -231,10 +235,11 @@ func getPeerAddress() string {
 	if peerAddress != "" {
 		return peerAddress
 	}
-	//if peerAddress = viper.GetString("peer.address"); peerAddress == "" {
-	if peerAddress = cfg.GetConfig().ContractAddress; peerAddress == "" {
-		log.Error("peer.address not configured, can't connect to peer")
-	}
+	////if peerAddress = viper.GetString("peer.address"); peerAddress == "" {
+	//if peerAddress = cfg.GetConfig().ContractAddress; peerAddress == "" {
+	//	log.Error("peer.address not configured, can't connect to peer")
+	//}
+	peerAddress = viper.GetString("chaincode.peer.address")
 	return peerAddress
 }
 
@@ -249,6 +254,8 @@ func newPeerClientConnection() (*grpc.ClientConn, error) {
 		return comm.NewClientConnectionWithAddress(peerAddress, true, true,
 			comm.InitTLSForShim(key, cert), kaOpts)
 	}
+	//TODO peer
+	log.Debugf("PeerClient: %s", getPeerAddress())
 	return comm.NewClientConnectionWithAddress(peerAddress, true, false, nil, kaOpts)
 }
 
@@ -388,6 +395,9 @@ func (stub *ChaincodeStub) GetState(key string) ([]byte, error) {
 	collection := ""
 	return stub.handler.handleGetState(collection, key, stub.ContractId, stub.ChannelId, stub.TxID)
 }
+func (stub *ChaincodeStub) GetStateByPrefix(prefix string) ([]*modules.KeyValue, error) {
+	return stub.handler.handelGetStateByPrefix(prefix, stub.ContractId, stub.ChannelId, stub.TxID)
+}
 
 // PutState documentation can be found in interfaces.go
 func (stub *ChaincodeStub) PutState(key string, value []byte) error {
@@ -436,10 +446,24 @@ func (stub *ChaincodeStub) OutChainQuery(outChainName string, params []byte) ([]
 	return stub.handler.handleOutQuery(collection, outChainName, params, stub.ChannelId, stub.TxID)
 }
 
+func (stub *ChaincodeStub) SendJury(msgType uint32, consultContent []byte, myAnswer []byte) ([]byte, error) {
+	// Access public data by setting the collection to empty string
+	collection := ""
+	return stub.handler.handleSendJury(collection, msgType, consultContent, myAnswer, stub.ChannelId, stub.TxID)
+}
+
+func (stub *ChaincodeStub) RecvJury(msgType uint32, consultContent []byte, timeout uint32) ([]byte, error) {
+	// Access public data by setting the collection to empty string
+	collection := ""
+	return stub.handler.handleRecvJury(collection, msgType, consultContent, timeout, stub.ChannelId, stub.TxID)
+}
+
 // GetArgs documentation can be found in interfaces.go
 func (stub *ChaincodeStub) GetArgs() [][]byte {
-
-	return stub.args[1:]
+	if len(stub.args) <= 2 {
+		return nil
+	}
+	return stub.args[2:]
 }
 
 // GetStringArgs documentation can be found in interfaces.go
@@ -465,13 +489,13 @@ func (stub *ChaincodeStub) GetFunctionAndParameters() (function string, params [
 }
 
 //GetInvokeParameters documentation can be found in interfaces.go
-func (stub *ChaincodeStub) GetInvokeParameters() (invokeAddr string, invokeTokens *modules.InvokeTokens, invokeFees *modules.AmountAsset, funcName string, params []string, err error) {
+func (stub *ChaincodeStub) GetInvokeParameters() (invokeAddr common.Address, invokeTokens []*modules.InvokeTokens, invokeFees *modules.AmountAsset, funcName string, params []string, err error) {
 	allargs := stub.args
 	//if len(allargs) > 2 {
 	invokeInfo := &modules.InvokeInfo{}
 	err = json.Unmarshal(allargs[0], invokeInfo)
 	if err != nil {
-		return "", nil, nil, "", nil, err
+		return common.Address{}, nil, nil, "", nil, err
 	}
 	invokeAddr = invokeInfo.InvokeAddress
 	invokeTokens = invokeInfo.InvokeTokens
@@ -497,7 +521,7 @@ func (stub *ChaincodeStub) GetArgsSlice() ([]byte, error) {
 }
 
 // GetTxTimestamp documentation can be found in interfaces.go
-func (stub *ChaincodeStub) GetTxTimestamp() (*timestamp.Timestamp, error) {
+func (stub *ChaincodeStub) GetTxTimestamp(rangeNumber uint32) (*timestamp.Timestamp, error) {
 	//glh
 	/*
 		hdr, err := utils.GetHeader(stub.proposal.Header)
@@ -511,7 +535,13 @@ func (stub *ChaincodeStub) GetTxTimestamp() (*timestamp.Timestamp, error) {
 
 		return chdr.GetTimestamp(), nil
 	*/
-	return nil, errors.New("glh unfinished")
+	headerTime, err := stub.handler.handleGetTimestamp("", rangeNumber, stub.ContractId, stub.ChannelId, stub.TxID)
+	if err != nil {
+		return nil, errors.New("handleGetState failed")
+	}
+	secs, _ := strconv.ParseInt(string(headerTime), 10, 64)
+	timeStamp := &(timestamp.Timestamp{Seconds: secs, Nanos: 0})
+	return timeStamp, nil
 }
 
 // ------------- ChaincodeEvent API ----------------------
@@ -529,11 +559,11 @@ func (stub *ChaincodeStub) SetEvent(name string, payload []byte) error {
 func (stub *ChaincodeStub) GetSystemConfig(key string) (string, error) {
 	return stub.handler.handleGetSystemConfig(key, stub.ChannelId, stub.TxID)
 }
-func (stub *ChaincodeStub) GetInvokeAddress() (string, error) {
+func (stub *ChaincodeStub) GetInvokeAddress() (common.Address, error) {
 	invokeAddr, _, _, _, _, err := stub.GetInvokeParameters()
 	return invokeAddr, err
 }
-func (stub *ChaincodeStub) GetInvokeTokens() (*modules.InvokeTokens, error) {
+func (stub *ChaincodeStub) GetInvokeTokens() ([]*modules.InvokeTokens, error) {
 	_, invokeTokens, _, _, _, err := stub.GetInvokeParameters()
 	return invokeTokens, err
 }
@@ -543,6 +573,11 @@ func (stub *ChaincodeStub) GetContractAllState() (map[string]*modules.ContractSt
 func (stub *ChaincodeStub) GetInvokeFees() (*modules.AmountAsset, error) {
 	_, _, invokeFees, _, _, err := stub.GetInvokeParameters()
 	return invokeFees, err
+}
+func (stub *ChaincodeStub) GetContractID() ([]byte, string) {
+	addr := new(common.Address)
+	addr.SetBytes(stub.ContractId)
+	return stub.ContractId, addr.Str()
 }
 
 //获得该合约的Token余额
@@ -564,6 +599,40 @@ func (stub *ChaincodeStub) SupplyToken(assetId []byte, uniqueId []byte, amt uint
 func (stub *ChaincodeStub) PayOutToken(addr string, invokeTokens *modules.InvokeTokens, lockTime uint32) error {
 	//TODO Devin return stub.handler.handlePayOutToken(  stub.ContractId, stub.ChannelId, stub.TxID)
 	return stub.handler.handlePayOutToken("", addr, invokeTokens, lockTime, stub.ContractId, stub.ChannelId, stub.TxID)
+}
+
+// 根据证书ID获得证书字节数据，不包含BEGIN和EN两行字符
+func (stub *ChaincodeStub) GetRequesterCert() (certBytes []byte, err error) {
+	if len(stub.args) <= 1 {
+		return nil, fmt.Errorf("args error: has no cert info")
+	}
+	certID := big.Int{}
+	certID.SetBytes(stub.args[1])
+	key := dagConstants.CERT_BYTES_SYMBOL + certID.String()
+	resBytes, err := stub.handler.handleGetCertState(key, stub.ChannelId, stub.TxID)
+	if err != nil {
+		return nil, err
+	}
+	certDBInfo := modules.CertBytesInfo{}
+	if err := json.Unmarshal(resBytes, &certDBInfo); err != nil {
+		return nil, err
+	}
+	return certDBInfo.Raw, nil
+}
+
+func (stub *ChaincodeStub) IsRequesterCertValidate() (bool, error) {
+	if len(stub.args) <= 1 {
+		return false, fmt.Errorf("args error: has no cert info")
+	}
+	certID := big.Int{}
+	certID.SetBytes(stub.args[1])
+	key := dagConstants.CERT_BYTES_SYMBOL + certID.String()
+	caller, err := stub.GetInvokeAddress()
+	if err != nil {
+		return false, err
+	}
+
+	return stub.handler.handlerCheckCertValidation(caller.String(), key, stub.ChannelId, stub.TxID)
 }
 
 // ------------- Logging Control and Chaincode Loggers ---------------

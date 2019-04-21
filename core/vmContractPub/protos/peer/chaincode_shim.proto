@@ -45,7 +45,7 @@ message ChaincodeMessage {
         DEL_STATE = 10;
         INVOKE_CHAINCODE = 11;
         RESPONSE = 13;
-//        GET_STATE_BY_RANGE = 14;
+        GET_STATE_BY_PREFIX=14;
 //        GET_QUERY_RESULT = 15;
 //        QUERY_STATE_NEXT = 16;
 //        QUERY_STATE_CLOSE = 17;
@@ -60,7 +60,10 @@ message ChaincodeMessage {
         PAY_OUT_TOKEN=26;
         DEFINE_TOKEN=27;
         SUPPLY_TOKEN=28;
-
+        GET_TIMESTAMP = 29;
+        GET_CERT = 30;
+        SEND_JURY = 31;
+        RECV_JURY = 32;
     }
 
     Type type = 1;
@@ -88,7 +91,13 @@ message GetState {
     string key = 1;
     string collection = 2;
 }
-
+message GetStateByPrefix {
+    string prefix = 1;
+}
+message GetTimestamp {
+    uint32 rangeNumber = 1;
+    string collection = 2;
+}
 message PutState {
     string key = 1;
     bytes value = 2;
@@ -150,6 +159,20 @@ message OutChainQuery {
     bytes params = 2;
     string collection = 3;
 }
+
+message SendJury {
+    uint32 msgType =1;
+    bytes consultContent = 2;
+    bytes myAnswer = 3;
+    string collection = 4;
+}
+message RecvJury {
+    uint32 msgType =1;
+    bytes consultContent = 2;
+    uint32 timeout =3;
+    string collection = 4;
+}
+
 message GetTokenBalance {
     string address = 1;
     string asset = 2;
@@ -174,6 +197,11 @@ message SupplyToken{
 message KeyForSystemConfig{
     string key = 1;
 }
+message GetStateByPrefixKv {
+    string key = 1;
+    bytes resultBytes = 2;
+}
+
 // Interface that provides support to chaincode execution. ChaincodeContext
 // provides the context necessary for the server to respond appropriately.
 service ChaincodeSupport {

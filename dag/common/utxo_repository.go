@@ -11,6 +11,7 @@
    You should have received a copy of the GNU General Public License
    along with go-palletone.  If not, see <http://www.gnu.org/licenses/>.
 */
+
 /*
  * @author PalletOne core developers <dev@pallet.one>
  * @date 2018
@@ -23,16 +24,18 @@ import (
 	"strings"
 	"unsafe"
 
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/palletone/go-palletone/common"
 	award2 "github.com/palletone/go-palletone/common/award"
 	"github.com/palletone/go-palletone/common/log"
 	"github.com/palletone/go-palletone/common/ptndb"
-	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/palletone/go-palletone/dag/constants"
 	"github.com/palletone/go-palletone/dag/dagconfig"
 	"github.com/palletone/go-palletone/dag/modules"
+	"github.com/palletone/go-palletone/dag/parameter"
 	"github.com/palletone/go-palletone/dag/storage"
 	"github.com/palletone/go-palletone/tokenengine"
+	"time"
 )
 
 type UtxoRepository struct {
@@ -60,11 +63,11 @@ type IUtxoRepository interface {
 	GetUtxoEntry(outpoint *modules.OutPoint) (*modules.Utxo, error)
 	GetAllUtxos() (map[modules.OutPoint]*modules.Utxo, error)
 	GetAddrOutpoints(addr common.Address) ([]modules.OutPoint, error)
-	GetAddrUtxos(addr common.Address) (map[modules.OutPoint]*modules.Utxo, error)
+	GetAddrUtxos(addr common.Address, asset *modules.Asset) (map[modules.OutPoint]*modules.Utxo, error)
 	ReadUtxos(addr common.Address, asset modules.Asset) (map[modules.OutPoint]*modules.Utxo, uint64)
 	GetUxto(txin modules.Input) *modules.Utxo
-	UpdateUtxo(txHash common.Hash, payment *modules.PaymentPayload, msgIndex uint32) error
-	ComputeFees(txs []*modules.TxPoolTransaction) (uint64, error)
+	UpdateUtxo(unitTime int64, txHash common.Hash, payment *modules.PaymentPayload, msgIndex uint32) error
+
 	ComputeTxFee(tx *modules.Transaction) (*modules.AmountAsset, error)
 	GetUxtoSetByInputs(txins []modules.Input) (map[modules.OutPoint]*modules.Utxo, uint64)
 	//GetAccountTokens(addr common.Address) (map[string]*modules.AccountToken, error)
@@ -85,8 +88,8 @@ func (repository *UtxoRepository) GetAllUtxos() (map[modules.OutPoint]*modules.U
 func (repository *UtxoRepository) GetAddrOutpoints(addr common.Address) ([]modules.OutPoint, error) {
 	return repository.utxodb.GetAddrOutpoints(addr)
 }
-func (repository *UtxoRepository) GetAddrUtxos(addr common.Address) (map[modules.OutPoint]*modules.Utxo, error) {
-	return repository.utxodb.GetAddrUtxos(addr)
+func (repository *UtxoRepository) GetAddrUtxos(addr common.Address, asset *modules.Asset) (map[modules.OutPoint]*modules.Utxo, error) {
+	return repository.utxodb.GetAddrUtxos(addr, asset)
 }
 func (repository *UtxoRepository) SaveUtxoView(view map[modules.OutPoint]*modules.Utxo) error {
 	return repository.utxodb.SaveUtxoView(view)
@@ -101,7 +104,7 @@ Return utxo struct and his total amount according to user's address, asset type
 */
 func (repository *UtxoRepository) ReadUtxos(addr common.Address, asset modules.Asset) (map[modules.OutPoint]*modules.Utxo, uint64) {
 
-	if dagconfig.DefaultConfig.UtxoIndex {
+	if dagconfig.DagConfig.UtxoIndex {
 		return repository.readUtxosByIndex(addr, asset)
 	} else {
 		return repository.readUtxosFrAll(addr, asset)
@@ -210,16 +213,19 @@ func (repository *UtxoRepository) GetUtxoByOutpoint(outpoint *modules.OutPoint) 
 根据交易信息中的outputs创建UTXO， 根据交易信息中的inputs销毁UTXO
 To create utxo according to outpus in transaction, and destory utxo according to inputs in transaction
 */
-func (repository *UtxoRepository) UpdateUtxo(txHash common.Hash, payment *modules.PaymentPayload, msgIndex uint32) error {
-
+func (repository *UtxoRepository) UpdateUtxo(unitTime int64, txHash common.Hash, payment *modules.PaymentPayload, msgIndex uint32) error {
+	// update utxo
+	err := repository.destoryUtxo(payment.Inputs)
+	if err != nil {
+		return err
+	}
 	// create utxo
-	errs := repository.writeUtxo(txHash, msgIndex, payment.Outputs, payment.LockTime)
+	errs := repository.writeUtxo(unitTime, txHash, msgIndex, payment.Outputs, payment.LockTime)
 	if len(errs) > 0 {
 		log.Error("error occurred on updated utxos, check the log file to find details.")
 		return errors.New("error occurred on updated utxos, check the log file to find details.")
 	}
-	// update utxo
-	repository.destoryUtxo(payment.Inputs)
+
 	return nil
 
 }
@@ -227,14 +233,15 @@ func (repository *UtxoRepository) UpdateUtxo(txHash common.Hash, payment *module
 /**
 创建UTXO
 */
-func (repository *UtxoRepository) writeUtxo(txHash common.Hash, msgIndex uint32, txouts []*modules.Output, lockTime uint32) []error {
+func (repository *UtxoRepository) writeUtxo(unitTime int64, txHash common.Hash, msgIndex uint32, txouts []*modules.Output, lockTime uint32) []error {
 	var errs []error
 	for outIndex, txout := range txouts {
 		utxo := &modules.Utxo{
-			Amount:   txout.Value,
-			Asset:    txout.Asset,
-			PkScript: txout.PkScript,
-			LockTime: lockTime,
+			Amount:    txout.Value,
+			Asset:     txout.Asset,
+			PkScript:  txout.PkScript,
+			LockTime:  lockTime,
+			Timestamp: uint64(unitTime),
 		}
 
 		// write to database
@@ -249,36 +256,12 @@ func (repository *UtxoRepository) writeUtxo(txHash common.Hash, msgIndex uint32,
 			errs = append(errs, err)
 			continue
 		}
-		//
-		//// write to utxo index db
-		//if dagconfig.DefaultConfig.UtxoIndex == false {
-		//	continue
-		//}
-		//
-		//// get address
+
 		sAddr, _ := tokenengine.GetAddressFromScript(txout.PkScript)
-		//// save addr key index.
-		//outpoint_key := make([]byte, 0)
-		//outpoint_key = append(outpoint_key, constants.AddrOutPoint_Prefix...)
-		//outpoint_key = append(outpoint_key, sAddr.Bytes()...)
-		//repository.idxdb.SaveIndexValue(append(outpoint_key, outpoint.Hash().Bytes()...), outpoint)
-		//
-		//utxoIndex := modules.UtxoIndex{
-		//	AccountAddr: sAddr,
-		//	Asset:       txout.Asset,
-		//	OutPoint:    outpoint,
-		//}
-		//utxoIndexVal := modules.UtxoIndexValue{
-		//	Amount:   txout.Value,
-		//	LockTime: lockTime,
-		//}
-		//if err := repository.idxdb.SaveIndexValue(utxoIndex.ToKey(), utxoIndexVal); err != nil {
-		//	log.Error("Write utxo index error: %s", err.Error())
-		//	errs = append(errs, err)
-		//}
 		//update address account info
-		if txout.Asset.AssetId == modules.PTNCOIN {
-			repository.statedb.UpdateAccountInfoBalance(sAddr, int64(txout.Value))
+		gasToken := dagconfig.DagConfig.GetGasToken()
+		if txout.Asset.AssetId == gasToken {
+			repository.statedb.UpdateAccountBalance(sAddr, int64(txout.Value))
 		}
 	}
 	return errs
@@ -288,7 +271,7 @@ func (repository *UtxoRepository) writeUtxo(txHash common.Hash, msgIndex uint32,
 销毁utxo
 destory utxo, delete from UTXO database
 */
-func (repository *UtxoRepository) destoryUtxo(txins []*modules.Input) {
+func (repository *UtxoRepository) destoryUtxo(txins []*modules.Input) error {
 	for _, txin := range txins {
 		//TODO for download sync
 		if txin == nil {
@@ -296,46 +279,30 @@ func (repository *UtxoRepository) destoryUtxo(txins []*modules.Input) {
 		}
 		outpoint := txin.PreviousOutPoint
 		if outpoint == nil || outpoint.IsEmpty() { //Coinbase
-			//if len(txin.Extra) > 0 {
-			//	var assetInfo modules.AssetInfo
-			//	if err := rlp.DecodeBytes(txin.Extra, &assetInfo); err == nil {
-			//		// save asset info
-			//		if err := repository.statedb.SaveAssetInfo(&assetInfo); err != nil {
-			//			log.Error("Save asset info error")
-			//		}
-			//	}
-			//}
 			continue
 		}
 		// get utxo info
 		utxo, err := repository.utxodb.GetUtxoEntry(outpoint)
 		if err != nil {
 			log.Error("Query utxo when destory uxto", "error", err.Error())
-			continue
+			return err
 		}
 
 		// delete utxo
 		if err := repository.utxodb.DeleteUtxo(outpoint); err != nil {
 			log.Error("Update uxto... ", "error", err.Error())
-			continue
+			return err
 		}
 		// delete index data
 		sAddr, _ := tokenengine.GetAddressFromScript(utxo.PkScript)
-		// addr := common.Address{}
-		// addr.SetString(sAddr.String())
-		// utxoIndex := &modules.UtxoIndex{
-		// 	AccountAddr: addr,
-		// 	Asset:       utxo.Asset,
-		// 	OutPoint:    outpoint,
-		// }
-		// if err := repository.idxdb.DeleteUtxoByIndex(utxoIndex); err != nil {
-		// 	log.Error("Destory uxto index", "error", err.Error())
-		// 	continue
-		// }
-		if utxo.Asset.AssetId == modules.NewPTNIdType() { // modules.PTNCOIN
-			repository.statedb.UpdateAccountInfoBalance(sAddr, -int64(utxo.Amount))
+		if utxo.Asset.AssetId == dagconfig.DagConfig.GetGasToken() { // modules.PTNCOIN
+			err := repository.statedb.UpdateAccountBalance(sAddr, -int64(utxo.Amount))
+			if err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
 /**
@@ -364,7 +331,7 @@ get asset infomation from leveldb by assetid ( Asset struct type )
 To get balance by wallet address and his/her chosen asset type
 */
 func (repository *UtxoRepository) WalletBalance(addr common.Address, asset modules.Asset) uint64 {
-	if dagconfig.DefaultConfig.UtxoIndex {
+	if dagconfig.DagConfig.UtxoIndex {
 		return repository.walletBalanceByIndex(addr, asset)
 	} else {
 		return repository.walletBalanceFrAll(addr, asset)
@@ -487,7 +454,7 @@ To get account's token info by utxo index db
 //				return nil, fmt.Errorf("Get acount tokens by index error: asset info does not exist")
 //			}
 //			tokens[utxoIndex.Asset.AssetId.String()] = &modules.AccountToken{
-//				Alias:   assetInfo.Alias,
+//				GasToken:   assetInfo.GasToken,
 //				AssetID: utxoIndex.Asset,
 //				Balance: utxoIndexVal.Amount,
 //			}
@@ -528,7 +495,7 @@ To get account token info by query the whole utxo table
 //				return nil, fmt.Errorf("Get acount tokens by whole error: asset info does not exist")
 //			}
 //			tokens[utxo.Asset.AssetId.String()] = &modules.AccountToken{
-//				Alias:   assetInfo.Alias,
+//				GasToken:   assetInfo.GasToken,
 //				AssetID: utxo.Asset,
 //				Balance: utxo.Amount,
 //			}
@@ -561,20 +528,30 @@ func checkUtxo(addr *common.Address, asset *modules.Asset, utxo *modules.Utxo) b
 根据交易列表计算交易费总和
 To compute transactions' fees
 */
-func (repository *UtxoRepository) ComputeFees(txs []*modules.TxPoolTransaction) (uint64, error) {
-	// current time slice mediator default income is 1 ptn
-	fees := uint64(0)
-	for i, tx := range txs {
-		fee, err := repository.ComputeTxFee(tx.Tx)
-		if err != nil {
-			return 0, err
-		}
-		tx.TxFee = fee
-		txs[i] = tx
-		fees += fee.Amount
-	}
-	return fees, nil
-}
+// func (repository *UtxoRepository) ComputeFees(txs []*modules.TxPoolTransaction) (uint64, error) {
+// 	// current time slice mediator default income is 1 ptn
+// 	fees := uint64(0)
+// 	unitUtxo := map[modules.OutPoint]*modules.Utxo{}
+// 	for i, tx := range txs {
+// 		getUtxoFromUnitAndDb := func(outpoint *modules.OutPoint) (*modules.Utxo, error) {
+// 			if utxo, ok := unitUtxo[*outpoint]; ok {
+// 				return utxo, nil
+// 			}
+// 			return repository.utxodb.GetUtxoEntry(outpoint)
+// 		}
+// 		fee, err := tx.Tx.GetTxFee(getUtxoFromUnitAndDb)
+// 		if err != nil {
+// 			return 0, err
+// 		}
+// 		tx.TxFee = fee
+// 		txs[i] = tx
+// 		fees += fee.Amount
+// 		for outPoint, utxo := range tx.Tx.GetNewUtxos() {
+// 			unitUtxo[outPoint] = utxo
+// 		}
+// 	}
+// 	return fees, nil
+// }
 
 /**
 根据交易列表计算保证金交易的收益
@@ -592,7 +569,9 @@ func (repository *UtxoRepository) ComputeAwards(txs []*modules.TxPoolTransaction
 		return nil, nil
 	} else {
 		addition := new(modules.Addition)
-		addition.Asset = *modules.NewPTNAsset()
+		//first tx's asset
+		addition.Asset = *txs[0].Tx.Asset()
+		addition.Amount = awards
 		return addition, nil
 	}
 }
@@ -609,6 +588,10 @@ func (repository *UtxoRepository) ComputeTxAward(tx *modules.Transaction, dagdb 
 		}
 		//判断是否是保证金合约地址
 		utxo := repository.GetUxto(*payload.Inputs[0])
+		if utxo == nil {
+			log.Infof("get utxo from db by outpoint[%s] return empty", payload.Inputs[0].PreviousOutPoint.String())
+			return 0, nil
+		}
 		addr, _ := tokenengine.GetAddressFromScript(utxo.PkScript)
 		if addr.String() == "PCGTta3M4t3yXu8uRgkKvaWd2d8DR32W9vM" {
 			awards := uint64(0)
@@ -618,12 +601,19 @@ func (repository *UtxoRepository) ComputeTxAward(tx *modules.Transaction, dagdb 
 				//1.通过交易hash获取单元hash
 				//txin.PreviousOutPoint.TxHash 获取txhash
 				//dagdb.GetTransaction()
-				_, unitHash, _, _ := dagdb.GetTransaction(txin.PreviousOutPoint.TxHash)
+				txlookup, err := dagdb.GetTxLookupEntry(txin.PreviousOutPoint.TxHash)
+				if err != nil {
+					return 0, err
+				}
 				//2.通过单元hash获取单元信息
-				header, _ := dagdb.GetHeader(unitHash)
+				//header, _ := dagdb.GetHeaderByHash(unitHash)
 				//3.通过单元获取头部信息中的时间戳
-				timestamp := header.Creationdate
-				award := award2.GetAwardsWithCoins(utxo.Amount, timestamp)
+				timestamp := int64(txlookup.Timestamp)
+				depositRate, _, err := repository.statedb.GetConfig("DepositRate")
+				if err != nil {
+					return 0, err
+				}
+				award := award2.GetAwardsWithCoins(utxo.Amount, timestamp, string(depositRate))
 				awards += award
 			}
 			return awards, nil
@@ -634,7 +624,7 @@ func (repository *UtxoRepository) ComputeTxAward(tx *modules.Transaction, dagdb 
 
 //计算一笔Tx中包含多少手续费
 func (repository *UtxoRepository) ComputeTxFee(tx *modules.Transaction) (*modules.AmountAsset, error) {
-	return tx.GetTxFee(repository.utxodb.GetUtxoEntry)
+	return tx.GetTxFee(repository.utxodb.GetUtxoEntry, time.Now().Unix())
 }
 
 /**
@@ -643,23 +633,8 @@ To compute mediator interest for packaging one unit
 */
 func ComputeRewards() uint64 {
 	var rewards uint64
-	if dagconfig.DefaultConfig.IsRewardCoin {
-		rewards = uint64(modules.DAO)
+	if dagconfig.DagConfig.IsRewardCoin {
+		rewards = parameter.CurrentSysParameters.GenerateUnitReward
 	}
 	return rewards
 }
-
-//func IsCoinBase(tx *modules.Transaction) bool {
-//	if len(tx.TxMessages) != 1 {
-//		return false
-//	}
-//	msg, ok := tx.TxMessages[0].Payload.(*modules.PaymentPayload)
-//	if !ok {
-//		return false
-//	}
-//	prevOut := msg.Inputs[0].PreviousOutPoint
-//	if prevOut.TxHash != (common.Hash{}) {
-//		return false
-//	}
-//	return true
-//}

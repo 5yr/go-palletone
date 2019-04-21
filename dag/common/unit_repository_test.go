@@ -21,7 +21,6 @@
 package common
 
 import (
-	"log"
 	"reflect"
 	"testing"
 	"time"
@@ -35,6 +34,8 @@ import (
 	"github.com/palletone/go-palletone/core"
 	"github.com/palletone/go-palletone/dag/modules"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/palletone/go-palletone/common/log"
 )
 
 func mockUnitRepository() *UnitRepository {
@@ -57,14 +58,14 @@ func TestGenesisUnit(t *testing.T) {
 	tx := modules.NewTransaction(append(msgs, msg))
 	asset := modules.NewPTNAsset()
 
-	gUnit, _ := NewGenesisUnit(modules.Transactions{tx}, time.Now().Unix(), asset)
+	gUnit, _ := NewGenesisUnit(modules.Transactions{tx}, time.Now().Unix(), asset, -1, common.Hash{})
 
-	log.Println("Genesis unit struct:")
-	log.Println("parent units:", gUnit.UnitHeader.ParentsHash)
+	log.Debug("Genesis unit struct:")
+	log.Debugf("parent units:%#x", gUnit.UnitHeader.ParentsHash)
 	//log.Println("asset ids:", gUnit.UnitHeader.AssetIDs)
-	log.Println("group_sign:", gUnit.UnitHeader.GroupSign)
-	log.Println("Root:", gUnit.UnitHeader.TxRoot)
-	log.Println("Number:", gUnit.UnitHeader.Number.String())
+	log.Debugf("group_sign:%x", gUnit.UnitHeader.GroupSign)
+	log.Debugf("Root:%x", gUnit.UnitHeader.TxRoot)
+	log.Debugf("Number:%s", gUnit.UnitHeader.Number.String())
 
 }
 
@@ -74,16 +75,18 @@ func TestGenGenesisConfigPayload(t *testing.T) {
 
 	genesisConf.InitialParameters.MediatorInterval = 10
 
-	payload, err := GenGenesisConfigPayload(&genesisConf, &modules.Asset{})
+	payloads, err := GenGenesisConfigPayload(&genesisConf, &modules.Asset{})
 
 	if err != nil {
-		log.Println(err)
+		log.Debug("TestGenGenesisConfigPayload", "err", err)
 	}
+	for _, payload := range payloads {
 
-	for _, w := range payload.WriteSet {
-		k := w.Key
-		v := w.Value
-		log.Println(k, v)
+		for _, w := range payload.WriteSet {
+			k := w.Key
+			v := w.Value
+			log.Debug("Key:", k, v)
+		}
 	}
 }
 
@@ -96,24 +99,23 @@ func TestSaveUnit(t *testing.T) {
 
 	p := common.Hash{}
 	p.SetString("0000000000000000000000000000000")
-	aid := modules.IDType16{}
+	aid := modules.AssetId{}
 	aid.SetBytes([]byte("xxxxxxxxxxxxxxxxxx"))
 	header := new(modules.Header)
 	header.ParentsHash = append(header.ParentsHash, p)
 	header.Number = &modules.ChainIndex{AssetID: modules.PTNCOIN, Index: 0}
-	//header.AssetIDs = []modules.IDType16{aid}
+	//header.AssetIDs = []modules.AssetId{aid}
 	key, _ := crypto.GenerateKey()
-	addr0 := crypto.PubkeyToAddress(&key.PublicKey)
+	//addr0 := crypto.PubkeyToAddress(&key.PublicKey)
 
 	sig, err := crypto.Sign(header.Hash().Bytes(), key)
 	if err != nil {
-		log.Println("sign header occured error: ", err)
+		log.Debug("sign header occured error: ", err)
 	}
 	auth := new(modules.Authentifier)
-	auth.R = sig[:32]
-	auth.S = sig[32:64]
-	auth.V = sig[64:]
-	auth.Address = addr0
+	auth.Signature = sig
+	auth.PubKey = crypto.CompressPubkey(&key.PublicKey)
+
 	header.Authors = *auth
 	contractTplPayload := modules.NewContractTplPayload([]byte("contract_template0000"),
 		"TestContractTpl", "./contract", "1.1.1", 1024,
@@ -134,7 +136,7 @@ func TestSaveUnit(t *testing.T) {
 		},
 	}
 	deployPayload := modules.NewContractDeployPayload([]byte("contract_template0000"), []byte("contract0000"),
-		"testDeploy", nil, 10, nil, readSet, writeSet)
+		"testDeploy", nil, 10, nil, nil, readSet, writeSet)
 
 	invokePayload := &modules.ContractInvokePayload{
 		ContractId: []byte("contract0000"),
@@ -195,7 +197,7 @@ func TestSaveUnit(t *testing.T) {
 	unit.UnitHash = unit.Hash()
 
 	if err := rep.SaveUnit(unit, true); err != nil {
-		log.Println(err)
+		log.Debug("TestSaveUnit", "err", err)
 	}
 }
 
@@ -277,9 +279,10 @@ func TestRlpDecode(t *testing.T) {
 func TestPaymentTransactionRLP(t *testing.T) {
 	p := common.Hash{}
 	p.SetString("0000000000000000022222222222")
-	aid := modules.IDType16{}
+	aid := modules.AssetId{}
 	aid.SetBytes([]byte("xxxxxxxxxxxxxxxxxx"))
-
+	uid := modules.UniqueId{}
+	uid.SetBytes([]byte{0xff, 0xee})
 	// TODO test PaymentPayload
 	txin := modules.Input{
 		PreviousOutPoint: &modules.OutPoint{
@@ -295,7 +298,7 @@ func TestPaymentTransactionRLP(t *testing.T) {
 		PkScript: []byte("kssssssssssssssssssslsll"),
 		Asset: &modules.Asset{
 			AssetId:  aid,
-			UniqueId: aid,
+			UniqueId: uid,
 		},
 	}
 	payment := &modules.PaymentPayload{
@@ -437,7 +440,7 @@ func TestContractDeployPayloadTransactionRLP(t *testing.T) {
 		Name:       "testdeploy",
 		Args:       [][]byte{[]byte{1, 2, 3}, []byte{4, 5, 6}},
 		//ExecutionTime: et,
-		Jury:     []common.Address{addr},
+		//Jury:     []common.Address{addr},
 		ReadSet:  readSet,
 		WriteSet: writeSet,
 	}
@@ -485,4 +488,99 @@ func TestContractDeployPayloadTransactionRLP(t *testing.T) {
 			}
 		}
 	}
+}
+
+func creatFeeTx(isContractTx bool, pubKey [][]byte, amount uint64, aid modules.AssetId) *modules.TxPoolTransaction {
+	tx := modules.Transaction{
+		TxMessages: make([]*modules.Message, 0),
+	}
+	if isContractTx {
+		sigs := make([]modules.SignatureSet, 0)
+		for _, pk := range pubKey {
+			sigSet := modules.SignatureSet{
+				PubKey: pk,
+			}
+			sigs = append(sigs, sigSet)
+		}
+		conSig := &modules.Message{
+			App: modules.APP_CONTRACT_STOP_REQUEST,
+		}
+		msgSig := &modules.Message{
+			App: modules.APP_SIGNATURE,
+			Payload: &modules.SignaturePayload{
+				Signatures: sigs,
+			},
+		}
+		tx.TxMessages = append(tx.TxMessages, conSig)
+		tx.TxMessages = append(tx.TxMessages, msgSig)
+	}
+
+	txPTx := &modules.TxPoolTransaction{
+		Tx: &tx,
+		TxFee: &modules.AmountAsset{
+			Amount: amount,
+			Asset: &modules.Asset{
+				AssetId: aid,
+			},
+		},
+	}
+	return txPTx
+}
+
+func TestComputeTxFees(t *testing.T) {
+	m, _ := common.StringToAddress("P1K7JsRvDc5THJe6TrtfdRNxp6ZkNiboy9z")
+	txs := make([]*modules.TxPoolTransaction, 0)
+	pks := make([][]byte, 0)
+	aId := modules.AssetId{}
+	tx := &modules.TxPoolTransaction{}
+
+	//1
+	pks = [][]byte{
+		{0x01}, {0x02}, {0x03}, {0x04}, {0x05}}
+	aId = modules.AssetId{'p', 't', 'n'}
+	tx = creatFeeTx(true, pks, 10, aId)
+	txs = append(txs, tx)
+
+	//	log.Info("TestComputeTxFees", "txs:", tx)
+	/*
+		//2
+		pks = [][]byte{
+			{0x01}, {0x02}, {0x03}, {0x04}}
+		aId = modules.AssetId{'p', 't', 'n'}
+		tx = creatFeeTx(true, pks, 10, aId)
+		txs = append(txs, tx)
+
+		//3
+		pks = [][]byte{
+			{0x05}, {0x06}, {0x07}, {0x08}}
+		aId = modules.AssetId{'p', 't', 'n'}
+		tx = creatFeeTx(true, pks, 10, aId)
+		txs = append(txs, tx)
+
+		//4
+		pks = [][]byte{
+			{0x01}, {0x02}, {0x03}, {0x04}}
+		aId = modules.AssetId{'a', 'b', 'c'}
+		tx = creatFeeTx(true, pks, 10, aId)
+		txs = append(txs, tx)
+
+		//5
+		pks = [][]byte{
+			{0x01}, {0x02}, {0x03}, {0x04}}
+		aId = modules.AssetId{'a', 'b', 'c'}
+		tx = creatFeeTx(true, pks, 10, aId)
+		txs = append(txs, tx)
+	*/
+	//log.Info("TestComputeTxFees", "txs:", txs)
+	ads, err := ComputeTxFees(&m, txs)
+	log.Info("TestComputeTxFees", "txs:", ads)
+	if err == nil {
+		outAds := arrangeAdditionFeeList(ads)
+		log.Debug("TestComputeTxFees", "outAds:", outAds)
+		coinbase, rewards, err := CreateCoinbase(outAds, time.Now())
+		if err == nil {
+			log.Debug("TestComputeTxFees", "coinbase", coinbase, "rewards", rewards)
+		}
+	}
+
 }

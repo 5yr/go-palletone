@@ -85,6 +85,10 @@ func (mp *MediatorPlugin) SubscribeVSSDealEvent(ch chan<- VSSDealEvent) event.Su
 }
 
 func (mp *MediatorPlugin) ProcessVSSDeal(dealEvent *VSSDealEvent) error {
+	if !mp.groupSigningEnabled {
+		return nil
+	}
+
 	dag := mp.dag
 	localMed := dag.GetActiveMediatorAddr(dealEvent.DstIndex)
 
@@ -124,6 +128,10 @@ func (mp *MediatorPlugin) ProcessVSSDeal(dealEvent *VSSDealEvent) error {
 }
 
 func (mp *MediatorPlugin) AddToResponseBuf(respEvent *VSSResponseEvent) {
+	if !mp.groupSigningEnabled {
+		return
+	}
+
 	resp := respEvent.Resp
 	lams := mp.GetLocalActiveMediators()
 	for _, localMed := range lams {
@@ -251,8 +259,8 @@ func (mp *MediatorPlugin) signUnitsTBLS(localMed common.Address) {
 }
 
 func (mp *MediatorPlugin) recoverUnitsTBLS(localMed common.Address) {
-	mp.recoverBufUnitLock.RLock()
-	defer mp.recoverBufUnitLock.RUnlock()
+	mp.recoverBufLock.RLock()
+	defer mp.recoverBufLock.RUnlock()
 
 	sigSharesBuf, ok := mp.toTBLSRecoverBuf[localMed]
 	if !ok {
@@ -266,10 +274,14 @@ func (mp *MediatorPlugin) recoverUnitsTBLS(localMed common.Address) {
 }
 
 func (mp *MediatorPlugin) AddToTBLSSignBufs(newUnit *modules.Unit) {
+	if !mp.groupSigningEnabled {
+		return
+	}
+
 	lams := mp.GetLocalActiveMediators()
 
 	for _, localMed := range lams {
-		log.Debugf("the mediator(%v) received a unit to be grouped sign: %v",
+		log.Debugf("the mediator(%v) received a unit(%v) to be group-signed",
 			localMed.Str(), newUnit.UnitHash.TerminalString())
 		go mp.addToTBLSSignBuf(localMed, newUnit)
 	}
@@ -318,7 +330,6 @@ func (mp *MediatorPlugin) signUnitTBLS(localMed common.Address, unitHash common.
 	)
 	// 1. 获取群签名所需数据
 	{
-		//newUnit, ok = medUnitsBuf[unitHash]
 		value, ok := medUnitsBuf.Load(unitHash)
 		if !ok {
 			log.Debugf("the mediator(%v) has no unit(%v) to sign TBLS",
@@ -355,7 +366,7 @@ func (mp *MediatorPlugin) signUnitTBLS(localMed common.Address, unitHash common.
 		}
 
 		// 2. 验证本 unit
-		if !dag.ValidateUnitExceptGroupSig(newUnit, false) {
+		if dag.ValidateUnitExceptGroupSig(newUnit) != nil {
 			log.Debugf("the unit validate except group sig fail: %v", newUnit.UnitHash.TerminalString())
 			return
 		}
@@ -391,7 +402,11 @@ func (mp *MediatorPlugin) signUnitTBLS(localMed common.Address, unitHash common.
 
 // 收集签名分片
 func (mp *MediatorPlugin) AddToTBLSRecoverBuf(newUnitHash common.Hash, sigShare []byte) error {
-	log.Debugf("received the sign shares of the unit: %v", newUnitHash.TerminalString())
+	if !mp.groupSigningEnabled {
+		return nil
+	}
+
+	log.Debugf("received the sign shares of the unit(%v)", newUnitHash.TerminalString())
 
 	dag := mp.dag
 	newUnit, err := dag.GetUnitByHash(newUnitHash)
@@ -402,8 +417,8 @@ func (mp *MediatorPlugin) AddToTBLSRecoverBuf(newUnitHash common.Hash, sigShare 
 	}
 
 	localMed := newUnit.Author()
-	mp.recoverBufUnitLock.RLock()
-	defer mp.recoverBufUnitLock.RUnlock()
+	mp.recoverBufLock.RLock()
+	defer mp.recoverBufLock.RUnlock()
 
 	medSigSharesBuf, ok := mp.toTBLSRecoverBuf[localMed]
 	if !ok {
@@ -433,8 +448,8 @@ func (mp *MediatorPlugin) SubscribeGroupSigEvent(ch chan<- GroupSigEvent) event.
 }
 
 func (mp *MediatorPlugin) recoverUnitTBLS(localMed common.Address, unitHash common.Hash) {
-	mp.recoverBufUnitLock.RLock()
-	defer mp.recoverBufUnitLock.RUnlock()
+	mp.recoverBufLock.Lock()
+	defer mp.recoverBufLock.Unlock()
 
 	// 1. 获取所有的签名分片
 	sigSharesBuf, ok := mp.toTBLSRecoverBuf[localMed]
@@ -515,13 +530,8 @@ func (mp *MediatorPlugin) recoverUnitTBLS(localMed common.Address, unitHash comm
 		unitHash.TerminalString(), hexutil.Encode(groupSig))
 
 	// 5. recover后的相关处理
-	go func() {
-		// recover后 删除buf
-		mp.recoverBufUnitLock.Lock()
-		defer mp.recoverBufUnitLock.Unlock()
-		delete(mp.toTBLSRecoverBuf[localMed], unitHash)
-
-		go mp.dag.SetUnitGroupSign(unitHash, groupSig, mp.ptn.TxPool())
-		go mp.groupSigFeed.Send(GroupSigEvent{UnitHash: unitHash, GroupSig: groupSig})
-	}()
+	// recover后 删除buf
+	delete(mp.toTBLSRecoverBuf[localMed], unitHash)
+	go mp.dag.SetUnitGroupSign(unitHash, groupSig, mp.ptn.TxPool())
+	go mp.groupSigFeed.Send(GroupSigEvent{UnitHash: unitHash, GroupSig: groupSig})
 }

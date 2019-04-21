@@ -11,6 +11,7 @@
 	You should have received a copy of the GNU General Public License
 	along with go-palletone.  If not, see <http://www.gnu.org/licenses/>.
 */
+
 /*
  * @author PalletOne core developer Albert·Gou <dev@pallet.one>
  * @date 2018
@@ -20,6 +21,7 @@
 package dag
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/dedis/kyber/sign/bls"
@@ -27,23 +29,50 @@ import (
 	"github.com/palletone/go-palletone/common/hexutil"
 	"github.com/palletone/go-palletone/common/log"
 	"github.com/palletone/go-palletone/core"
+	"github.com/palletone/go-palletone/dag/dagconfig"
 	"github.com/palletone/go-palletone/dag/modules"
 )
 
-func (dag *Dag) validateMediatorSchedule(nextUnit *modules.Unit) bool {
-	phash, idx, _ := dag.propRep.GetNewestUnit(nextUnit.Number().AssetID)
-	if phash != nextUnit.ParentHash()[0] {
-		log.Debug("invalidated unit's parent hash!")
+func (dag *Dag) validateUnit(unit *modules.Unit) error {
+	author := unit.Author()
+	if !dag.IsActiveMediator(author) && !dag.IsPrecedingMediator(author) {
+		errStr := fmt.Sprintf("The author(%v) of unit(%v) is not mediator!",
+			author.Str(), unit.UnitHash.TerminalString())
+		log.Debugf(errStr)
+
+		return fmt.Errorf(errStr)
+	}
+
+	err := dag.validate.ValidateUnitExceptGroupSig(unit)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (dag *Dag) validateUnitHeader(nextUnit *modules.Unit) bool {
+	pHash := nextUnit.ParentHash()[0]
+	headHash, idx, _ := dag.propRep.GetNewestUnit(nextUnit.Number().AssetID)
+	if pHash != headHash {
+		// todo 出现分叉, 调用本方法之前未处理分叉
+		log.Debugf("unit(%v) on the forked chain: parentHash(%v) not equal headUnitHash(%v)",
+			nextUnit.UnitHash.TerminalString(), pHash.TerminalString(), headHash.TerminalString())
 		return false
 	}
 
 	if idx.Index+1 != nextUnit.NumberU64() {
-		log.Debugf("invalidated unit's height number!, last height:%d, next unit height:%d",
-			idx.Index, nextUnit.Number().Index)
+		log.Debugf("invalidated unit(%v)'s height number!, last height:%d, next unit height:%d",
+			nextUnit.UnitHash.TerminalString(), idx.Index, nextUnit.NumberU64())
 		return false
 	}
 
-	ts, _ := dag.propRep.GetNewestUnitTimestamp(modules.PTNCOIN)
+	return true
+}
+
+func (dag *Dag) validateMediatorSchedule(nextUnit *modules.Unit) bool {
+	gasToken := dagconfig.DagConfig.GetGasToken()
+	ts, _ := dag.propRep.GetNewestUnitTimestamp(gasToken)
 	if ts >= nextUnit.Timestamp() {
 		log.Debug("invalidated unit's timestamp!")
 		return false
@@ -57,7 +86,7 @@ func (dag *Dag) validateMediatorSchedule(nextUnit *modules.Unit) bool {
 
 	scheduledMediator := dag.GetScheduledMediator(slotNum)
 	if !scheduledMediator.Equal(nextUnit.Author()) {
-		log.Debug("Mediator produced unit at wrong time!")
+		log.Debug("mediator(%v) produced unit at wrong time!", nextUnit.Author().Str())
 		return false
 	}
 
@@ -69,12 +98,9 @@ func (d *Dag) Close() {
 }
 
 // @author Albert·Gou
-func (d *Dag) ValidateUnitExceptGroupSig(unit *modules.Unit, isGenesis bool) bool {
+func (d *Dag) ValidateUnitExceptGroupSig(unit *modules.Unit) error {
 	unitState := d.validate.ValidateUnitExceptGroupSig(unit)
-	if unitState != nil {
-		return false
-	}
-	return true
+	return unitState
 }
 
 // author Albert·Gou
@@ -100,6 +126,7 @@ func (dag *Dag) InitPropertyDB(genesis *core.Genesis, unit *modules.Unit) error 
 	if err := dag.propRep.StoreDynGlobalProp(dgp); err != nil {
 		return err
 	}
+	//dag.propRep.SetNewestUnit(unit.Header())
 
 	//  初始化mediator调度器，并存在数据库
 	// @author Albert·Gou
@@ -155,7 +182,7 @@ func (d *Dag) IsIrreversibleUnit(hash common.Hash) bool {
 	return false
 }
 
-func (d *Dag) GetIrreversibleUnit(id modules.IDType16) (*modules.ChainIndex, error) {
+func (d *Dag) GetIrreversibleUnit(id modules.AssetId) (*modules.ChainIndex, error) {
 	_, idx, err := d.propRep.GetLastStableUnit(id)
 	return idx, err
 }

@@ -19,10 +19,11 @@
 package jury
 
 import (
+	"time"
+
 	"github.com/palletone/go-palletone/common/log"
 	"github.com/palletone/go-palletone/contracts"
 	"github.com/palletone/go-palletone/dag/errors"
-	"time"
 )
 
 type ContractResp struct {
@@ -82,7 +83,7 @@ type ContractStopReq struct {
 }
 
 func (req ContractStopReq) do(v contracts.ContractInf) (interface{}, error) {
-	return nil, v.Stop(req.chainID, req.deployId, req.txid, req.deleteImage)
+	return v.Stop(req.chainID, req.deployId, req.txid, req.deleteImage)
 }
 
 func ContractProcess(contract *contracts.Contract, req ContractReqInf) (interface{}, error) {

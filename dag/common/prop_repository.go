@@ -23,7 +23,7 @@ import (
 	"github.com/palletone/go-palletone/common"
 	"github.com/palletone/go-palletone/common/log"
 	"github.com/palletone/go-palletone/common/ptndb"
-	"github.com/palletone/go-palletone/core/node"
+	"github.com/palletone/go-palletone/dag/dagconfig"
 	"github.com/palletone/go-palletone/dag/modules"
 	"github.com/palletone/go-palletone/dag/storage"
 	"time"
@@ -41,10 +41,10 @@ type IPropRepository interface {
 	RetrieveMediatorSchl() (*modules.MediatorSchedule, error)
 	GetChainThreshold() (int, error)
 	SetLastStableUnit(hash common.Hash, index *modules.ChainIndex) error
-	GetLastStableUnit(token modules.IDType16) (common.Hash, *modules.ChainIndex, error)
+	GetLastStableUnit(token modules.AssetId) (common.Hash, *modules.ChainIndex, error)
 	SetNewestUnit(header *modules.Header) error
-	GetNewestUnit(token modules.IDType16) (common.Hash, *modules.ChainIndex, error)
-	GetNewestUnitTimestamp(token modules.IDType16) (int64, error)
+	GetNewestUnit(token modules.AssetId) (common.Hash, *modules.ChainIndex, error)
+	GetNewestUnitTimestamp(token modules.AssetId) (int64, error)
 	GetScheduledMediator(slotNum uint32) common.Address
 	UpdateMediatorSchedule(ms *modules.MediatorSchedule, gp *modules.GlobalProperty, dgp *modules.DynamicGlobalProperty) bool
 	GetSlotTime(gp *modules.GlobalProperty, dgp *modules.DynamicGlobalProperty, slotNum uint32) time.Time
@@ -86,17 +86,17 @@ func (pRep *PropRepository) RetrieveMediatorSchl() (*modules.MediatorSchedule, e
 func (pRep *PropRepository) SetLastStableUnit(hash common.Hash, index *modules.ChainIndex) error {
 	return pRep.db.SetLastStableUnit(hash, index)
 }
-func (pRep *PropRepository) GetLastStableUnit(token modules.IDType16) (common.Hash, *modules.ChainIndex, error) {
+func (pRep *PropRepository) GetLastStableUnit(token modules.AssetId) (common.Hash, *modules.ChainIndex, error) {
 	return pRep.db.GetLastStableUnit(token)
 }
 func (pRep *PropRepository) SetNewestUnit(header *modules.Header) error {
 	return pRep.db.SetNewestUnit(header)
 }
-func (pRep *PropRepository) GetNewestUnit(token modules.IDType16) (common.Hash, *modules.ChainIndex, error) {
+func (pRep *PropRepository) GetNewestUnit(token modules.AssetId) (common.Hash, *modules.ChainIndex, error) {
 	hash, index, _, e := pRep.db.GetNewestUnit(token)
 	return hash, index, e
 }
-func (pRep *PropRepository) GetNewestUnitTimestamp(token modules.IDType16) (int64, error) {
+func (pRep *PropRepository) GetNewestUnitTimestamp(token modules.AssetId) (int64, error) {
 	_, _, t, e := pRep.db.GetNewestUnit(token)
 	return t, e
 }
@@ -104,7 +104,7 @@ func (pRep *PropRepository) GetNewestUnitTimestamp(token modules.IDType16) (int6
 // 洗牌算法，更新mediator的调度顺序
 func (pRep *PropRepository) UpdateMediatorSchedule(ms *modules.MediatorSchedule, gp *modules.GlobalProperty,
 	dgp *modules.DynamicGlobalProperty) bool {
-	token := node.DefaultConfig.GetGasToken()
+	token := dagconfig.DagConfig.GetGasToken()
 	_, idx, timestamp, err := pRep.db.GetNewestUnit(token)
 	if err != nil {
 		log.Debug("GetNewestUnit error:" + err.Error())
@@ -169,18 +169,19 @@ func (pRep *PropRepository) GetSlotTime(gp *modules.GlobalProperty, dgp *modules
 	}
 
 	interval := gp.ChainParameters.MediatorInterval
-	_, idx, ts, _ := pRep.db.GetNewestUnit(modules.PTNCOIN)
+	gasToken := dagconfig.DagConfig.GetGasToken()
+	_, idx, ts, _ := pRep.db.GetNewestUnit(gasToken)
 	// 本条件是用来生产第一个unit
 	if idx.Index == 0 {
 		/**
-		注：第一个验证单元在genesisTime加上一个验证单元间隔
+		注：第一个unit的生产时间是在genesisTime加上一个unit生产间隔
 		n.b. first Unit is at genesisTime plus one UnitInterval
 		*/
 		genesisTime := ts
 		return time.Unix(genesisTime+int64(slotNum)*int64(interval), 0)
 	}
 
-	// 最近的验证单元的绝对slot
+	// 最近的unit的绝对slot
 	var unitAbsSlot = ts / int64(interval)
 	// 最近的时间槽起始时间
 	unitSlotTime := time.Unix(unitAbsSlot*int64(interval), 0)
@@ -189,7 +190,7 @@ func (pRep *PropRepository) GetSlotTime(gp *modules.GlobalProperty, dgp *modules
 
 	/**
 	如果是维护周期的话，加上维护间隔时间
-	如果不是，就直接加上验证单元的slot时间
+	如果不是，就直接加上unit的slot时间
 	*/
 	// "slot 1" is UnitSlotTime,
 	// plus maintenance interval if last uint is a maintenance Unit

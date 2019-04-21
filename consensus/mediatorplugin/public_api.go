@@ -28,13 +28,16 @@ import (
 	"github.com/palletone/go-palletone/dag/modules"
 )
 
-// todo 待删除，jury暂时使用mediator配置
 func (mp *MediatorPlugin) LocalMediators() []common.Address {
 	addrs := make([]common.Address, 0)
 	for add, _ := range mp.mediators {
 		addrs = append(addrs, mp.mediators[add].Address)
 	}
 	return addrs
+}
+
+func (mp *MediatorPlugin) IsEnabledGroupSign() bool {
+	return mp.groupSigningEnabled
 }
 
 func (mp *MediatorPlugin) GetLocalActiveMediators() []common.Address {
@@ -149,7 +152,7 @@ func (a *PublicMediatorAPI) GetVoted(addStr string) ([]string, error) {
 		return nil, err
 	}
 
-	medMap := a.dag.GetVotedMediator(addr)
+	medMap := a.dag.GetAccountInfo(addr).VotedMediators
 	mediators := make([]string, 0, len(medMap))
 
 	for med, _ := range medMap {
@@ -157,6 +160,16 @@ func (a *PublicMediatorAPI) GetVoted(addStr string) ([]string, error) {
 	}
 
 	return mediators, nil
+}
+
+func (a *PublicMediatorAPI) GetDesiredCount(addStr string) (uint8, error) {
+	addr, err := common.StringToAddress(addStr)
+	if err != nil {
+		return 0, err
+	}
+
+	desiredCount := a.dag.GetAccountInfo(addr).DesiredMediatorCount
+	return desiredCount, nil
 }
 
 func (a *PublicMediatorAPI) GetNextUpdateTime() string {

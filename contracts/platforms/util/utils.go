@@ -34,6 +34,7 @@ import (
 	"github.com/palletone/go-palletone/core/vmContractPub/util"
 	cutil "github.com/palletone/go-palletone/vm/common"
 	"github.com/palletone/go-palletone/contracts/contractcfg"
+	"github.com/palletone/go-palletone/vm/dockercontroller"
 )
 
 //var log = flogging.MustGetLogger("util")
@@ -179,6 +180,12 @@ func DockerBuild(opts DockerBuildOptions) error {
 	// Create an ephemeral container, armed with our Env/Cmd
 	//创建一个暂时的容器用于链码编译
 	//-----------------------------------------------------------------------------------
+	hostConfig := &docker.HostConfig{
+		Memory:           dockercontroller.GetInt64FromDb("TempUccMemory"), //1GB
+		MemorySwap:dockercontroller.GetInt64FromDb("TempUccMemorySwap"), //1GB
+		CPUShares:        dockercontroller.GetInt64FromDb("TempUccCPUShares"),
+		CPUQuota:         dockercontroller.GetInt64FromDb("TempUccCPUQuota"),
+	}
 	container, err := client.CreateContainer(docker.CreateContainerOptions{
 		Config: &docker.Config{
 			Image:        opts.Image,
@@ -187,6 +194,7 @@ func DockerBuild(opts DockerBuildOptions) error {
 			AttachStdout: true,
 			AttachStderr: true,
 		},
+		HostConfig:hostConfig,
 	})
 	if err != nil {
 		return fmt.Errorf("Error creating container: %s", err)

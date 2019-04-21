@@ -19,13 +19,13 @@
 package log
 
 var DefaultConfig = Config{
-	OutputPaths:      []string{"stdout", "./log/all.log"},
-	ErrorOutputPaths: []string{"stderr", "./log/error.log"},
+	OutputPaths:      []string{LogStdout, "./log/all.log"},
+	ErrorOutputPaths: []string{LogStderr, "./log/error.log"},
 	OpenModule:       []string{"all"},
 	LoggerLvl:        "DEBUG",
 	Encoding:         "console",
 	Development:      true,
-	RotationMaxSize:  200,
+	RotationMaxSize:  500,
 	RotationMaxAge:   28,
 }
 

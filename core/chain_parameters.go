@@ -25,7 +25,7 @@ type ChainParameters struct {
 	// 目前的操作交易费，current schedule of fees
 	CurrentFees FeeSchedule `json:"currentFees"`
 
-	// 验证单元之间的间隔时间，以秒为单元。 interval in seconds between Units
+	// unit生产之间的间隔时间，以秒为单元。 interval in seconds between Units
 	MediatorInterval uint8 `json:"mediatorInterval"`
 
 	// 区块链维护事件之间的间隔，以秒为单元。 interval in sections between unit maintenance events
@@ -33,12 +33,16 @@ type ChainParameters struct {
 
 	// 在维护时跳过的verifiedUnitInterval数量。 number of verifiedUnitInterval to skip at maintenance time
 	//	MaintenanceSkipSlots uint8
+
+	// 活跃mediator的最大数量。maximum number of active mediators
+	MaximumMediatorCount uint8 `json:"maxMediatorCount"`
 }
 
 func NewChainParams() (c ChainParameters) {
 	c.CurrentFees = newFeeSchedule()
 	c.MediatorInterval = DefaultMediatorInterval
 	c.MaintenanceInterval = DefaultMaintenanceInterval
+	c.MaximumMediatorCount = DefaultMaxMediatorCount
 
 	return
 }
@@ -46,16 +50,14 @@ func NewChainParams() (c ChainParameters) {
 // 操作交易费计划
 type FeeSchedule struct {
 	// mediator 创建费用
-	MediatorCreateFee        uint64                `json:"mediatorCreateFee"`
-	VoteMediatorFee          uint64                `json:"voteMediatorFee"`
-	TransferFee              TransferFeeParameters `json:"transferPtnFee"`
-	SetDesiredMediatorNumFee uint8                 `json:"setDesiredMediatorNumFee"`
+	MediatorCreateFee uint64                `json:"mediatorCreateFee"`
+	AccountUpdateFee  uint64                `json:"accountUpdateFee"`
+	TransferFee       TransferFeeParameters `json:"transferPtnFee"`
 }
 
 func newFeeSchedule() (f FeeSchedule) {
 	f.MediatorCreateFee = DefaultMediatorCreateFee
-	f.VoteMediatorFee = DefaultVoteMediatorFee
-	f.SetDesiredMediatorNumFee = DefaultSetDesiredMediatorNumFee
+	f.AccountUpdateFee = DefaultAccountUpdateFee
 	f.TransferFee = newTransferFeeParameters()
 
 	return

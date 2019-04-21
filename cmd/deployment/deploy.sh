@@ -25,7 +25,7 @@ function ExecInit()
        fi
 
     path=`pwd`
-    fullpath=${path}"/palletone/gptn/leveldb"
+    fullpath=${path}"/palletone/leveldb"
     echo "leveldb path:"$fullpath
     if [ ! -d $fullpath ]; then
         echo "====================init err=================="
@@ -36,7 +36,7 @@ function ExecInit()
     else
     echo $count
         cd node$count
-        cp ../node1/palletone/gptn/leveldb ./palletone/gptn/. -rf
+        cp ../node1/palletone/leveldb ./palletone/. -rf
         rm -rf log
         cd ../
     fi
@@ -53,16 +53,16 @@ function ExecInit()
 function replacejson()
 {
     length=`cat $1 |jq '.initialMediatorCandidates| length'`
-    MinMediatorCount="MinMediatorCount"
-    line=`awk "/$MinMediatorCount/{print NR}" $1`
+    minMediatorCount="minMediatorCount"
+    line=`awk "/$minMediatorCount/{print NR}" $1`
     content=`cat $1| awk "NR==$line"`
     strsub=","
     result=$(echo $content | grep "${strsub}")
     if [[ "$result" != "" ]]
     then
-        newMinMediatorCount="\"MinMediatorCount\":$length,"
+        newMinMediatorCount="\"minMediatorCount\":$length,"
     else
-        newMinMediatorCount="\"MinMediatorCount\":$length"
+        newMinMediatorCount="\"minMediatorCount\":$length"
     fi
 
     replace=`sed -e "${line}c $newMinMediatorCount" $1`
@@ -132,9 +132,23 @@ LoopDeploy $n;
 json="node1/ptn-genesis.json"
 replacejson $json 
 
-
 ModifyBootstrapNodes $n
 
 ExecInit $n
 
 
+num=$[$n+1]
+MakeTestNet $num
+
+num=$[$n+2]
+MakeTestNet $num
+
+num=$[$n+3]
+MakeTestNet $num
+
+
+num=$[$n+4]
+MakeTestNet $num
+
+num=$[$n+5]
+MakeTestNet $num

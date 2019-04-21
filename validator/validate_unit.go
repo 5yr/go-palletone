@@ -28,14 +28,14 @@ import (
 	"github.com/palletone/go-palletone/configure"
 	"github.com/palletone/go-palletone/core"
 	"github.com/palletone/go-palletone/dag/modules"
+	"time"
 )
 
 /**
-验证单元的签名，需要比对见证人列表
+验证unit的签名，需要比对见证人列表
 To validate unit's signature, and mediators' signature
 */
 func (validate *Validate) validateUnitSignature(h *modules.Header) ValidationCode {
-
 	// copy unit's header
 	header := modules.CopyHeader(h)
 	// signature does not contain authors and witness fields
@@ -47,22 +47,17 @@ func (validate *Validate) validateUnitSignature(h *modules.Header) ValidationCod
 		log.Debug("Verify unit signature ,header's authors is nil.")
 		return UNIT_STATE_INVALID_AUTHOR_SIGNATURE
 	}
-	sig := make([]byte, 65)
-	copy(sig[32-len(h.Authors.R):32], h.Authors.R)
-	copy(sig[64-len(h.Authors.S):64], h.Authors.S)
-	copy(sig[64:], h.Authors.V)
-	// recover pubkey
 
 	hash := header.HashWithoutAuthor()
-	pubKey, err := modules.RSVtoPublicKey(hash[:], h.Authors.R[:], h.Authors.S[:], h.Authors.V[:])
-	if err != nil {
-		log.Debug("Verify unit signature when recover pubkey", "error", err.Error())
-		return UNIT_STATE_INVALID_AUTHOR_SIGNATURE
-	}
+	//pubKey, err := modules.RSVtoPublicKey(hash[:], h.Authors.R[:], h.Authors.S[:], h.Authors.V[:])
+	//if err != nil {
+	//	log.Debug("Verify unit signature when recover pubkey", "error", err.Error())
+	//	return UNIT_STATE_INVALID_AUTHOR_SIGNATURE
+	//}
 	//  pubKey to pubKey_bytes
-	pubKey_bytes := crypto.CompressPubkey(pubKey)
+	//pubKey_bytes := crypto.CompressPubkey(pubKey)
 
-	if !crypto.VerifySignature(pubKey_bytes, hash.Bytes(), sig[:64]) {
+	if !crypto.VerifySignature(h.Authors.PubKey, hash.Bytes(), h.Authors.Signature) {
 		log.Debug("Verify unit signature error.")
 		return UNIT_STATE_INVALID_AUTHOR_SIGNATURE
 	}
@@ -97,126 +92,96 @@ func (validate *Validate) validateUnitSignature(h *modules.Header) ValidationCod
 
 /**
 验证Unit
-Validate unit
+Validate unit(除群签名以外), 新生产的unit暂时还没有群签名
 */
-// modified by Albert·Gou 新生产的unit暂时还没有群签名
 //func (validate *Validate) ValidateUnit(unit *modules.Unit, isGenesis bool) byte {
 func (validate *Validate) ValidateUnitExceptGroupSig(unit *modules.Unit) error {
-	//  unit's size  should bigger than minimum.
-	if unit.Size() < 125 {
-		log.Debug("Validate size", "error", "size is invalid", "size", unit.Size())
-		return NewValidateError(UNIT_STATE_INVALID_SIZE)
-	}
+	start := time.Now()
+	defer func() {
+		log.Debugf("ValidateUnitExceptGroupSig unit[%s],cost:%s", unit.Hash().String(), time.Since(start))
+	}()
 
-	// step1. check header.New unit is no group signature yet
-	//TODO must recover
-
-	sigState := validate.validateHeaderExceptGroupSig(unit.UnitHeader)
-	if sigState != modules.UNIT_STATE_VALIDATED &&
-		sigState != modules.UNIT_STATE_AUTHOR_SIGNATURE_PASSED && sigState != modules.UNIT_STATE_CHECK_HEADER_PASSED {
-		log.Debug("Validate unit's header failed.", "error code", sigState)
-		return NewValidateError(sigState)
+	// step1. check header ---New unit is no group signature yet
+	unitHeaderValidateResult := validate.validateHeaderExceptGroupSig(unit.UnitHeader)
+	if unitHeaderValidateResult != TxValidationCode_VALID &&
+		unitHeaderValidateResult != UNIT_STATE_AUTHOR_SIGNATURE_PASSED &&
+		unitHeaderValidateResult != UNIT_STATE_ORPHAN {
+		log.Debug("Validate unit's header failed.", "error code", unitHeaderValidateResult)
+		return NewValidateError(unitHeaderValidateResult)
 	}
 
 	//validate tx root
 	root := core.DeriveSha(unit.Txs)
 	if root != unit.UnitHeader.TxRoot {
+		log.Debug("Validate unit's header failed.", "root", root, "unit.UnitHeader.TxRoot", unit.UnitHeader.TxRoot)
 		return NewValidateError(UNIT_STATE_INVALID_HEADER_TXROOT)
 	}
 	// step2. check transactions in unit
-	err := validate.ValidateTransactions(&unit.Txs)
-
-	if err != nil {
-		msg := fmt.Sprintf("Validate unit(%s) transactions failed: %v", unit.UnitHash.String(), err)
+	code := validate.validateTransactions(unit.Txs, unit.Timestamp())
+	if code != TxValidationCode_VALID {
+		msg := fmt.Sprintf("Validate unit(%s) transactions failed: %v", unit.UnitHash.String(), code)
 		log.Debug(msg)
-		return NewValidateError(UNIT_STATE_HAS_INVALID_TRANSACTIONS)
+		return NewValidateError(code)
+	}
+	//maybe orphan unit
+	if unitHeaderValidateResult != TxValidationCode_VALID {
+		return NewValidateError(unitHeaderValidateResult)
 	}
 	return nil
 }
 
-// modified by Albert·Gou 新生产的unit暂时还没有群签名
-//func (validate *Validate) validateHeader(header *modules.Header, isGenesis bool) byte {
 func (validate *Validate) validateHeaderExceptGroupSig(header *modules.Header) ValidationCode {
-	// todo yangjie 应当错误返回前，打印验错误的具体消息
 	if header == nil {
+		log.Info("header is nil.")
 		return UNIT_STATE_INVALID_HEADER
 	}
 
 	if len(header.ParentsHash) == 0 {
-
+		log.Info("the header's parentHash is null.")
 		return UNIT_STATE_INVALID_HEADER
 	}
+
 	//  check header's extra data
 	if uint64(len(header.Extra)) > configure.MaximumExtraDataSize {
 		msg := fmt.Sprintf("extra-data too long: %d > %d", len(header.Extra), configure.MaximumExtraDataSize)
-		log.Debug(msg)
+		log.Info(msg)
 		return UNIT_STATE_INVALID_EXTRA_DATA
 	}
+
 	// check txroot
 	if header.TxRoot == (common.Hash{}) {
-		return UNIT_STATE_INVALID_HEADER
+		log.Info("the header's txroot is null.")
+		return UNIT_STATE_INVALID_HEADER_TXROOT
 	}
 
 	// check creation_time
-	if header.Creationdate <= modules.UNIT_CREATION_DATE_INITIAL_UINT64 {
-		return UNIT_STATE_INVALID_HEADER
+	if header.Time <= modules.UNIT_CREATION_DATE_INITIAL_UINT64 {
+		return UNIT_STATE_INVALID_HEADER_TIME
 	}
 
 	// check header's number
 	if header.Number == nil {
-		return UNIT_STATE_INVALID_HEADER
+		return UNIT_STATE_INVALID_HEADER_NUMBER
 	}
-	//if len(header.AssetIDs) == 0 {
-	//	return modules.UNIT_STATE_INVALID_HEADER
-	//}
-
-	//if isGenesis {
-	//	if len(header.AssetIDs) != 1 {
-	//		return modules.UNIT_STATE_INVALID_HEADER
-	//	}
-	//	//ptnAssetID, _ := modules.SetIdTypeByHex(dagconfig.DefaultConfig.PtnAssetHex)
-	//	asset := modules.NewPTNAsset()
-	//	ptnAssetID := asset.AssetId
-	//	if header.AssetIDs[0] != ptnAssetID || !header.Number.IsMain || header.Number.Index != 0 {
-	//		fmt.Println(6)
-	//		fmt.Println(header.AssetIDs[0].String())
-	//		fmt.Println(ptnAssetID.String())
-	//		return modules.UNIT_STATE_INVALID_HEADER
-	//	}
-	//	// 	return modules.UNIT_STATE_CHECK_HEADER_PASSED
-	//}
-	//var isValidAssetId bool
-	//for _, asset := range header.AssetIDs {
-	//	if asset == header.Number.AssetID {
-	//		isValidAssetId = true
-	//		break
-	//	}
-	//}
-	//if !isValidAssetId {
-	//	fmt.Println(7)
-	//	return modules.UNIT_STATE_INVALID_HEADER
-	//}
-
-	// check authors
-	//TODO must recover
-	//if header.Authors.Empty() {
-	//	return modules.UNIT_STATE_INVALID_AUTHOR_SIGNATURE
-	//}
-
-	// comment by Albert·Gou 新生产的unit暂时还没有群签名
-	//if len(header.GroupSign) < 64 {
-	//	return modules.UNIT_STATE_INVALID_HEADER_WITNESS
-	//}
-
-	// TODO 同步过来的unit 没有Authors ，因此无法验证签名有效性。
 	var thisUnitIsNotTransmitted bool
-
 	if thisUnitIsNotTransmitted {
 		sigState := validate.validateUnitSignature(header)
 		return sigState
 	}
+	//Is orphan?
+	parent := header.ParentsHash[0]
+	if validate.dagquery != nil {
+		parentHeader, err := validate.dagquery.GetHeaderByHash(parent)
+		if err != nil {
+			return UNIT_STATE_ORPHAN
+		}
+		if parentHeader.Number.Index+1 != header.Number.Index {
+			return UNIT_STATE_INVALID_HEADER_NUMBER
+		}
+	}
 	return TxValidationCode_VALID
 }
+
 func (validate *Validate) ValidateHeader(h *modules.Header) error {
 	return nil
 }

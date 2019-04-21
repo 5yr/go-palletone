@@ -276,7 +276,7 @@ nodes.
 )
 
 func accountList(ctx *cli.Context) error {
-	stack, _ := makeConfigNode(ctx)
+	stack, _ := makeConfigNode(ctx, false)
 	var index int
 	for _, wallet := range stack.AccountManager().Wallets() {
 		for _, account := range wallet.Accounts() {
@@ -377,12 +377,14 @@ func ambiguousAddrRecovery(ks *keystore.KeyStore, err *keystore.AmbiguousAddrErr
 func createAccount(ctx *cli.Context, password string) (common.Address, error) {
 	var err error
 	var cfg FullConfig
+	var configDir string
 	// Load config file.
-	if cfg, err = maybeLoadConfig(ctx); err != nil {
+	if cfg, configDir, err = maybeLoadConfig(ctx); err != nil {
 		utils.Fatalf("%v", err)
 	}
 
-	utils.SetNodeConfig(ctx, &cfg.Node)
+	cfg.Node.P2P = cfg.P2P
+	utils.SetNodeConfig(ctx, &cfg.Node, configDir)
 	scryptN, scryptP, keydir, err := cfg.Node.AccountConfig()
 
 	address, err := keystore.StoreKey(keydir, password, scryptN, scryptP)
@@ -420,7 +422,7 @@ func accountUpdate(ctx *cli.Context) error {
 	if len(ctx.Args()) == 0 {
 		utils.Fatalf("No accounts specified to update")
 	}
-	stack, _ := makeConfigNode(ctx)
+	stack, _ := makeConfigNode(ctx, false)
 	ks := stack.GetKeyStore()
 
 	for _, addr := range ctx.Args() {
@@ -437,7 +439,7 @@ func accountSignString(ctx *cli.Context) error {
 		utils.Fatalf("No accounts specified to update")
 	}
 
-	stack, _ := makeConfigNode(ctx)
+	stack, _ := makeConfigNode(ctx, false)
 	ks := stack.GetKeyStore()
 	addr := ctx.Args().First()
 	account, _ := utils.MakeAddress(ks, addr)
@@ -455,7 +457,7 @@ func accountDumpKey(ctx *cli.Context) error {
 	if len(ctx.Args()) == 0 {
 		utils.Fatalf("No accounts specified to update")
 	}
-	stack, _ := makeConfigNode(ctx)
+	stack, _ := makeConfigNode(ctx, false)
 	ks := stack.GetKeyStore()
 	addr := ctx.Args().First()
 	account, _ := utils.MakeAddress(ks, addr)
@@ -474,7 +476,7 @@ func accountSignVerify(ctx *cli.Context) error {
 		utils.Fatalf("No accounts specified to update")
 	}
 
-	stack, _ := makeConfigNode(ctx)
+	stack, _ := makeConfigNode(ctx, false)
 	ks := stack.GetKeyStore()
 	addr := ctx.Args().First()
 	account, _ := utils.MakeAddress(ks, addr)
@@ -509,10 +511,10 @@ func accountSignVerify(ctx *cli.Context) error {
 // 		utils.Fatalf("Could not read wallet file: %v", err)
 // 	}
 
-// 	stack, _ := makeConfigNode(ctx)
+// 	stack, _ := makeConfigNode(ctx, false)
 // 	passphrase := getPassPhrase("", false, 0, utils.MakePasswordList(ctx))
 
-// 	ks := stack.AccountManager().Backends(keystore.KeyStoreType)[0].(*keystore.KeyStore)
+// 	ks := stack.GetKeyStore()
 // 	acct, err := ks.ImportPreSaleKey(keyJson, passphrase)
 // 	if err != nil {
 // 		utils.Fatalf("%v", err)
@@ -670,7 +672,7 @@ func accountImport(ctx *cli.Context) error {
 	if err != nil {
 		utils.Fatalf("Failed to load the private key: %v", err)
 	}
-	stack, _ := makeConfigNode(ctx)
+	stack, _ := makeConfigNode(ctx, false)
 	passphrase := getPassPhrase("Your new account is locked with a password. Please give a password. Do not forget this password.", true, 0, utils.MakePasswordList(ctx))
 
 	ks := stack.GetKeyStore()

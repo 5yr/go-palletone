@@ -26,7 +26,6 @@ import (
 	"time"
 
 	"github.com/palletone/go-palletone/common/hexutil"
-	"github.com/palletone/go-palletone/common/log"
 	"github.com/palletone/go-palletone/configure"
 
 	//"github.com/palletone/go-palletone/consensus/consensusconfig"
@@ -43,17 +42,18 @@ import (
 var DefaultConfig = Config{
 	SyncMode:      downloader.FastSync,
 	NetworkId:     1,
-	LightPeers:    100,
+	LightServ:     10,
+	LightPeers:    10,
 	DatabaseCache: 768,
 	TrieCache:     256,
 	TrieTimeout:   5 * time.Minute,
 	GasPrice:      big.NewInt(0.01 * configure.PalletOne),
 
-	TxPool: txspool.DefaultTxPoolConfig,
-
-	Dag:            dagconfig.DefaultConfig,
-	Log:            log.DefaultConfig,
+	TxPool:         txspool.DefaultTxPoolConfig,
+	Dag:            dagconfig.DagConfig,
 	MediatorPlugin: mediatorplugin.DefaultConfig,
+	Jury:           jury.DefaultConfig,
+	Contract:       contractcfg.DefaultConfig,
 }
 
 func init() {
@@ -101,7 +101,7 @@ type Config struct {
 	GasPrice     *big.Int
 
 	// Transaction pool options
-	TxPool txspool.TxPoolConfig
+	TxPool txspool.TxPoolConfig `toml:"-"`
 
 	// Gas Price Oracle options
 	//GPO gasprice.Config
@@ -110,8 +110,6 @@ type Config struct {
 	EnablePreimageRecording bool
 	// DAG options
 	Dag dagconfig.Config `toml:"-"`
-	//Log config
-	Log log.Config `toml:"-"`
 
 	//jury Account
 	Jury jury.Config `toml:"-"`
@@ -126,7 +124,7 @@ type Config struct {
 	MediatorPlugin mediatorplugin.Config `toml:"-"`
 
 	//must be equal to the node.GasToken
-	TokenSubProtocol string `toml:"-"`
+	//TokenSubProtocol string `toml:"-"`
 }
 
 type configMarshaling struct {

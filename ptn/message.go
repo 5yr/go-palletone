@@ -21,18 +21,18 @@ package ptn
 
 import (
 	"encoding/json"
+	"fmt"
 	"sync/atomic"
 	"time"
 
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/palletone/go-palletone/common"
 	"github.com/palletone/go-palletone/common/log"
 	"github.com/palletone/go-palletone/common/p2p"
-	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/palletone/go-palletone/consensus/jury"
 	mp "github.com/palletone/go-palletone/consensus/mediatorplugin"
 	"github.com/palletone/go-palletone/dag/modules"
 	"github.com/palletone/go-palletone/ptn/downloader"
-	"github.com/palletone/go-palletone/tokenengine"
 )
 
 type Tag uint64
@@ -354,16 +354,30 @@ func (pm *ProtocolManager) NewBlockMsg(msg p2p.Msg, p *peer) error {
 
 	unit := &modules.Unit{}
 	if err := json.Unmarshal(data, &unit); err != nil {
-		log.Info("ProtocolManager", "NewBlockMsg json ummarshal err:", err)
+		log.Info("ProtocolManager", "NewBlockMsg json ummarshal err:", err, "data", string(data))
 		return err
+	}
+
+	timestamp := time.Unix(unit.Timestamp(), 0)
+	log.Infof("Received unit(%v) #%v parent(%v) @%v signed by %v", unit.UnitHash.TerminalString(),
+		unit.NumberU64(), unit.ParentHash()[0].TerminalString(), timestamp.Format("2006-01-02 15:04:05"),
+		unit.Author().Str())
+
+	latency := time.Now().Sub(timestamp)
+	if latency < -3*time.Second {
+		errStr := fmt.Sprintf("Rejecting unit #%v with timestamp(%v) in the future signed by %v",
+			unit.NumberU64(), timestamp.Format("2006-01-02 15:04:05"), unit.Author().Str())
+		log.Debugf(errStr)
+		return fmt.Errorf(errStr)
 	}
 
 	var temptxs modules.Transactions
 	for _, tx := range unit.Txs {
 		if tx.IsContractTx() {
 			if !pm.contractProc.CheckContractTxValid(tx, true) {
-				log.Debug("NewBlockMsg", "CheckContractTxValid is false")
-				return errResp(ErrDecode, "Contract transaction valid check fail, reqId %v", tx.RequestHash().String())
+				log.Debug("NewBlockMsg,CheckContractTxValid is false.", "reqHash", tx.RequestHash().String())
+				//return errResp(ErrDecode, "Contract transaction valid check fail, reqId %v", tx.RequestHash().String())
+				continue
 			}
 		}
 		temptxs = append(temptxs, tx)
@@ -372,7 +386,7 @@ func (pm *ProtocolManager) NewBlockMsg(msg p2p.Msg, p *peer) error {
 
 	unit.ReceivedAt = msg.ReceivedAt
 	unit.ReceivedFrom = p
-	log.Debug("===NewBlockMsg===", "peer id:", p.id, "index:", unit.Number().Index, "unit:", *unit)
+	//log.Debug("===NewBlockMsg===", "peer id:", p.id, "index:", unit.Number().Index, "unit:", *unit)
 
 	// Mark the peer as owning the block and schedule it for import
 	p.MarkUnit(unit.UnitHash)
@@ -418,41 +432,17 @@ func (pm *ProtocolManager) TxMsg(msg p2p.Msg, p *peer) error {
 		}
 
 		if tx.IsContractTx() {
-			//if !pm.contractProc.CheckContractTxValid(tx, false) {
-			//	log.Debug("TxMsg", "CheckContractTxValid is false")
-			//	return nil //errResp(ErrDecode, "msg %v: Contract transaction valid fail", msg)
-			//}
 			if pm.contractProc.IsSystemContractTx(tx) {
 				continue
 			}
 		}
-
-		for msgIndex, msg := range tx.TxMessages {
-			payload, ok := msg.Payload.(*modules.PaymentPayload)
-			if ok == false {
-				continue
-			}
-			for inputIndex, txin := range payload.Inputs {
-				if txin.PreviousOutPoint == nil {
-					continue
-				}
-				st, err := pm.dag.GetUtxoEntry(txin.PreviousOutPoint)
-				if st == nil || err != nil {
-					return err
-				}
-				err = tokenengine.ScriptValidate(st.PkScript, nil, tx, msgIndex, inputIndex)
-				if err != nil {
-					return err
-				}
-			}
-		}
+		// @Jay ---> 同步过来的交易 p2p层不需要做交易的验证。
 		p.MarkTransaction(tx.Hash())
-		txHash := tx.Hash()
-		txHash = txHash
 		_, err := pm.txpool.ProcessTransaction(tx, true, true, 0 /*pm.txpool.Tag(peer.ID())*/)
-		//acceptedTxs = acceptedTxs
 		if err != nil {
-			return errResp(ErrDecode, "transaction %d not accepteable ", i, "err:", err)
+			log.Infof("the transaction %s not accepteable, err:%s", tx.Hash().String(), err.Error())
+			continue
+			//return errResp(ErrDecode, "transaction %d not accepteable ", i, "err:", err)
 		}
 		pm.txpool.AddRemote(tx)
 	}
@@ -461,30 +451,28 @@ func (pm *ProtocolManager) TxMsg(msg p2p.Msg, p *peer) error {
 	return nil
 }
 
-//func (pm *ProtocolManager) ConsensusMsg(msg p2p.Msg, p *peer) error {
-//	var consensusmsg string
-//	if err := msg.Decode(&consensusmsg); err != nil {
-//		return errResp(ErrDecode, "msg %v: %v", msg, err)
-//	}
-//	log.Info("ConsensusMsg recv:", consensusmsg)
-//	if consensusmsg == "A" {
-//		p.SendConsensus("Hello I received A")
-//	}
-//	return nil
-//}
-
+// todo 待合并 NewBlockMsg
 func (pm *ProtocolManager) NewProducedUnitMsg(msg p2p.Msg, p *peer) error {
 	// Retrieve and decode the propagated new produced unit
 	data := []byte{}
 	if err := msg.Decode(&data); err != nil {
-		log.Debug("ProtocolManager", "NewBlockMsg msg:", msg.String())
+		log.Debug("ProtocolManager", "NewProducedUnitMsg msg:", msg.String())
 		return errResp(ErrDecode, "%v: %v", msg, err)
 	}
 
 	var unit modules.Unit
 	if err := json.Unmarshal(data, &unit); err != nil {
-		log.Debug("ProtocolManager", "NewBlockMsg json ummarshal err:", err)
+		log.Debug("ProtocolManager", "NewProducedUnitMsg json ummarshal err:", err)
 		return err
+	}
+
+	timestamp := time.Unix(unit.Timestamp(), 0)
+	latency := time.Now().Sub(timestamp)
+	if latency < -3*time.Second {
+		errStr := fmt.Sprintf("Rejecting unit #%v with timestamp(%v) in the future signed by %v",
+			unit.NumberU64(), timestamp.Format("2006-01-02 15:04:05"), unit.Author().Str())
+		log.Debugf(errStr)
+		return fmt.Errorf(errStr)
 	}
 
 	pm.producer.AddToTBLSSignBufs(&unit)
@@ -550,7 +538,6 @@ func (pm *ProtocolManager) ContractMsg(msg p2p.Msg, p *peer) error {
 		log.Info("===ContractMsg===", "err:", err)
 		return errResp(ErrDecode, "%v: %v", msg, err)
 	}
-
 	log.Info("===ContractMsg===", "event type:", event.CType)
 	err := pm.contractProc.ProcessContractEvent(&event)
 	if err != nil {
@@ -560,56 +547,56 @@ func (pm *ProtocolManager) ContractMsg(msg p2p.Msg, p *peer) error {
 }
 
 func (pm *ProtocolManager) ElectionMsg(msg p2p.Msg, p *peer) error {
-	var event jury.ElectionEvent
-	if err := msg.Decode(&event); err != nil {
+	var evs jury.ElectionEventBytes
+	if err := msg.Decode(&evs); err != nil {
 		log.Info("===ElectionMsg===", "err:", err)
 		return errResp(ErrDecode, "%v: %v", msg, err)
 	}
-	log.Info("===ElectionMsg===", "event ", event)
-
-	if event.EType == jury.ELECTION_EVENT_REQUEST {
-		result, err := pm.contractProc.ProcessElectionRequestEvent(&event)
-		if err != nil {
-			log.Debug("ElectionMsg", "ProcessElectionRequestEvent error:", err)
-		}
-		if result != nil {
-			p.SendElectionResultEvent(*result)
-		}
-	} else if event.EType == jury.ELECTION_EVENT_RESULT {
-		err := pm.contractProc.ProcessElectionResultEvent(&event)
-		if err != nil {
-			log.Debug("ElectionMsg", "ProcessElectionResultEvent error:", err)
+	//log.Info("===ElectionMsg===", "event ", evs)
+	event, err := evs.ToElectionEvent()
+	if err != nil {
+		log.Debug("ElectionMsg, ToElectionEvent fail")
+		return nil
+	}
+	result, err := pm.contractProc.ProcessElectionEvent(event)
+	if err != nil {
+		log.Debug("ElectionMsg", "ProcessElectionEvent error:", err)
+	} else {
+		if event.EType == jury.ELECTION_EVENT_REQUEST {
+			if result != nil {
+				p.SendElectionEvent(*result)
+			}
 		}
 	}
-
 	return nil
 }
 
-//local test
-func (pm *ProtocolManager) ContractReqLocalSend(event jury.ContractEvent) {
-	log.Info("ContractReqLocalSend", "event", event.Tx.Hash())
-	pm.contractCh <- event
+func (pm *ProtocolManager) AdapterMsg(msg p2p.Msg, p *peer) error {
+	var avs jury.AdapterEventBytes
+	if err := msg.Decode(&avs); err != nil {
+		log.Info("===AdapterMsg===", "err:", err)
+		return errResp(ErrDecode, "%v: %v", msg, err)
+	}
+	log.Debug("===============ProtocolManager", "avs:", avs)
+
+	event, err := avs.ToAdapterEvent()
+	if err != nil {
+		log.Debug("AdapterMsg, ToAdapterEvent fail")
+		return nil
+	}
+
+	_, err = pm.contractProc.ProcessAdapterEvent(event)
+	if err != nil {
+		log.Debug("AdapterMsg", "ProcessAdapterEvent error:", err)
+	}
+	return nil
 }
 
-func (pm *ProtocolManager) ContractBroadcast(event jury.ContractEvent, local bool) {
-	//peers := pm.peers.PeersWithoutUnit(event.Tx.TxHash)
-	peers := pm.peers.GetPeers()
-	log.Debug("ContractBroadcast", "event type", event.CType, "reqId", event.Tx.RequestHash().String(), "peers num", len(peers))
-
-	for _, peer := range peers {
-		peer.SendContractTransaction(event)
+func (pm *ProtocolManager) GetLeafNodesMsg(msg p2p.Msg, p *peer) error {
+	headers, err := pm.dag.GetAllLeafNodes()
+	if err != nil {
+		log.Info("===GetLeafNodesMsg===", "err:", err)
+		return errResp(ErrDecode, "%v: %v", msg, err)
 	}
-
-	if local {
-		go pm.contractProc.ProcessContractEvent(&event)
-	}
-}
-
-func (pm *ProtocolManager) ElectionBroadcast(event jury.ElectionEvent) {
-	//log.Debug("ElectionBroadcast", "event num", event.Event.(jury.ElectionRequestEvent).Num, "data", event.Event.(jury.ElectionRequestEvent).Data)
-
-	peers := pm.peers.GetPeers()
-	for _, peer := range peers {
-		peer.SendElectionEvent(event)
-	}
+	return p.SendUnitHeaders(headers)
 }

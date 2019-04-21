@@ -44,7 +44,7 @@ func getDeploymentSpec(_ context.Context, spec *pb.ChaincodeSpec) (*pb.Chaincode
 
 func mockerDeployUserCC() error {
 	log.Debug("==================mockerDeployUserCC enter")
-	time.Sleep(time.Duration(10) * time.Second)
+	time.Sleep(time.Duration(1) * time.Second)
 	log.Debug("==================mockerDeployUserCC end")
 
 	return nil
@@ -53,7 +53,8 @@ func mockerDeployUserCC() error {
 func DeployUserCC(chaincodeData []byte, spec *pb.ChaincodeSpec, chainID string, usrcc *UserChaincode, txid string, txsim rwset.TxSimulator, timeout time.Duration) error {
 	cdDeploymentSpec := &pb.ChaincodeDeploymentSpec{}
 
-//	return mockerDeployUserCC()
+	//return mockerDeployUserCC()
+
 	var err error
 	if cfg.DebugTest {
 		//return mockerDeployUserCC()

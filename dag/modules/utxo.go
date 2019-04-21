@@ -50,8 +50,23 @@ type Utxo struct {
 	//VoteResult common.Address `json:"vote_info"` //这个字段删掉
 	// flags contains additional info about output such as whether it is spent, and whether is has
 	// been modified since is was loaded.
-	Flags txoFlags
+	Timestamp uint64 `json:"timestamp"` //Unit's Timestamp
+	Flags     txoFlags
 }
+
+func NewUtxo(output *Output, lockTime uint32, timestamp int64) *Utxo {
+	return &Utxo{
+		Amount:    output.Value,
+		Asset:     output.Asset,
+		PkScript:  output.PkScript,
+		LockTime:  lockTime,
+		Timestamp: uint64(timestamp),
+	}
+}
+func (u *Utxo) GetTimestamp() int64 {
+	return int64(u.Timestamp)
+}
+
 type UtxoWithOutPoint struct {
 	Utxo
 	OutPoint
@@ -99,11 +114,12 @@ func (utxo *Utxo) Clone() *Utxo {
 		return nil
 	}
 	return &Utxo{
-		PkScript: utxo.PkScript,
-		Asset:    utxo.Asset,
-		Amount:   utxo.Amount,
-		LockTime: utxo.LockTime,
-		Flags:    utxo.Flags,
+		PkScript:  utxo.PkScript,
+		Asset:     utxo.Asset,
+		Amount:    utxo.Amount,
+		LockTime:  utxo.LockTime,
+		Flags:     utxo.Flags,
+		Timestamp: utxo.Timestamp,
 	}
 }
 func (utxo *Utxo) Flag2Str() string {
@@ -268,7 +284,7 @@ type SpendProof struct {
 structure for saving asset property infomation
 */
 //type AssetInfo struct {
-//	Alias          string         `json:"alias"`           // asset name
+//	GasToken          string         `json:"alias"`           // asset name
 //	AssetID        *Asset         `json:"asset_id"`        // asset id
 //	InitialTotal   uint64         `json:"initial_total"`   // total circulation
 //	Decimal        uint32         `json:"deciaml"`         // asset accuracy
@@ -284,7 +300,7 @@ structure for saving asset property infomation
 //}
 //
 //func (assetInfo *AssetInfo) Print() {
-//	fmt.Println("Asset alias", assetInfo.Alias)
+//	fmt.Println("Asset alias", assetInfo.GasToken)
 //	fmt.Println("Asset Assetid", assetInfo.AssetID.AssetId)
 //	fmt.Println("Asset UniqueId", assetInfo.AssetID.UniqueId)
 //	//fmt.Println("Asset ChainId", assetInfo.AssetID.ChainId)
@@ -294,7 +310,7 @@ structure for saving asset property infomation
 //}
 
 //type AccountToken struct {
-//	Alias   string `json:"alias"`
+//	GasToken   string `json:"alias"`
 //	AssetID *Asset `json:"asset_id"`
 //	Balance uint64 `json:"balance"`
 //}

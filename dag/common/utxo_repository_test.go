@@ -31,6 +31,7 @@ import (
 	"github.com/palletone/go-palletone/dag/dagconfig"
 	"github.com/palletone/go-palletone/dag/modules"
 	"github.com/palletone/go-palletone/dag/storage"
+	"time"
 )
 
 func mockUtxoRepository() *UtxoRepository {
@@ -43,7 +44,7 @@ func mockUtxoRepository() *UtxoRepository {
 
 func TestUpdateUtxo(t *testing.T) {
 	rep := mockUtxoRepository()
-	rep.UpdateUtxo(common.Hash{}, &modules.PaymentPayload{}, uint32(0))
+	rep.UpdateUtxo(time.Now().Unix(), common.Hash{}, &modules.PaymentPayload{}, uint32(0))
 }
 
 func TestReadUtxos(t *testing.T) {
@@ -53,7 +54,7 @@ func TestReadUtxos(t *testing.T) {
 }
 
 func TestGetUxto(t *testing.T) {
-	dagconfig.DefaultConfig.DbPath = getTempDir(t)
+	dagconfig.DagConfig.DbPath = getTempDir(t)
 	log.Println(modules.Input{})
 }
 
@@ -72,7 +73,7 @@ func getTempDir(t *testing.T) string {
 //		UniqueId: assetid,
 //	}
 //	assetInfo := modules.AssetInfo{
-//		Alias:        "Test",
+//		GasToken:        "Test",
 //		AssetID:      &asset,
 //		InitialTotal: 1000000000,
 //		Decimal:      100000000,
@@ -101,7 +102,7 @@ func getTempDir(t *testing.T) string {
 //	} else {
 //		for _, token := range tokens {
 //			log.Printf("Token (%s, %v) = %v\n",
-//				token.Alias, token.AssetID.AssetId, token.Balance)
+//				token.GasToken, token.AssetID.AssetId, token.Balance)
 //			// test WalletBalance method
 //			log.Println(rep.WalletBalance(addr, *token.AssetID))
 //			// test ReadUtxos method

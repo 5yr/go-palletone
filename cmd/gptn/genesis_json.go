@@ -27,6 +27,7 @@ import (
 	"github.com/palletone/go-palletone/cmd/console"
 	"github.com/palletone/go-palletone/cmd/utils"
 	"github.com/palletone/go-palletone/common"
+	"github.com/palletone/go-palletone/common/files"
 	"github.com/palletone/go-palletone/configure"
 	mp "github.com/palletone/go-palletone/consensus/mediatorplugin"
 	"github.com/palletone/go-palletone/core"
@@ -47,7 +48,7 @@ var (
 	GenesisJsonPathFlag = cli.StringFlag{
 		Name:  "genesispath",
 		Usage: "Path to create a Genesis State at.",
-		Value: defaultGenesisJsonPath,
+		Value: "", //defaultGenesisJsonPath,
 	}
 
 	createGenesisJsonCommand = cli.Command{
@@ -65,6 +66,18 @@ with an existing account or a newly created account.
 
 If a well-formed JSON file exists at the path, 
 it will be replaced with an example Genesis State.`,
+	}
+
+	dumpJsonCommand = cli.Command{
+		Action:    utils.MigrateFlags(dumpJson),
+		Name:      "dumpjson",
+		Usage:     "Dumps genesis json to a specified file",
+		ArgsUsage: "<jsonFilePath>",
+		Flags: []cli.Flag{
+			GenesisJsonPathFlag,
+		},
+		Category:    "MISCELLANEOUS COMMANDS",
+		Description: `The dumpjson command dumps genesis json to a specified file.`,
 	}
 )
 
@@ -123,19 +136,30 @@ func createGenesisJson(ctx *cli.Context) error {
 		return err
 	}
 
-	// comment by Albert·Gou
-	//account, _, err := createExampleAccount(ctx)
-	//if err != nil {
-	//	return err
-	//}
-
 	mcs := createExampleMediators(ctx, core.DefaultMediatorCount)
 	nodeStr, err := getNodeInfo(ctx)
 	if err != nil {
 		return err
 	}
 
-	genesisState := createExampleGenesis(account, mcs, nodeStr)
+	genesisState := createExampleGenesis()
+	genesisState.TokenHolder = account
+	genesisState.SystemConfig.FoundationAddress = genesisState.TokenHolder
+	genesisState.InitialMediatorCandidates = initialMediatorCandidates(mcs, nodeStr)
+
+	// set root ca holder
+	genesisState.DigitalIdentityConfig.RootCAHolder = genesisState.TokenHolder
+
+	initMediatorCount := len(mcs)
+	genesisState.InitialActiveMediators = uint16(initMediatorCount)
+	genesisState.ImmutableParameters.MinimumMediatorCount = uint8(initMediatorCount)
+
+	//配置测试的基金会地址及密码
+	account, _, err = createExampleAccount(ctx)
+	if err != nil {
+		return err
+	}
+	genesisState.SystemConfig.FoundationAddress = account
 
 	var genesisJson []byte
 	genesisJson, err = json.MarshalIndent(genesisState, "", "  ")
@@ -165,7 +189,7 @@ func createGenesisJson(ctx *cli.Context) error {
 		return err
 	}
 
-	fmt.Println("Creating example genesis state in file " + genesisOut)
+	fmt.Println("Creating example genesis state in file: " + genesisOut)
 
 	// 修改本节点的一些特殊配置
 	modifyConfig(ctx, mcs)
@@ -174,7 +198,7 @@ func createGenesisJson(ctx *cli.Context) error {
 }
 
 func modifyConfig(ctx *cli.Context, mediators []*mp.MediatorConf) error {
-	cfg := &FullConfig{Node: defaultNodeConfig()}
+	cfg := new(FullConfig)
 	configPath := getConfigPath(ctx)
 
 	// 加载配置文件中的配置信息到 cfg中
@@ -184,11 +208,17 @@ func modifyConfig(ctx *cli.Context, mediators []*mp.MediatorConf) error {
 		return err
 	}
 
-	// 修改本届mediator的特殊配置
+	// 修改本节点中mediator的一些特殊配置
+	cfg.MediatorPlugin.EnableProducing = true
 	cfg.MediatorPlugin.EnableStaleProduction = true
-	cfg.MediatorPlugin.EnableConsecutiveProduction = true
+	cfg.MediatorPlugin.EnableConsecutiveProduction = false
 	cfg.MediatorPlugin.RequiredParticipation = 0
+	cfg.MediatorPlugin.EnableGroupSigning = true
 	cfg.MediatorPlugin.Mediators = mediators
+
+	// 修改默认的Jury配置
+	cfg.Jury.Accounts[0].Address = mediators[0].Address
+	cfg.Jury.Accounts[0].Password = mediators[0].Password
 
 	err = makeConfigFile(cfg, configPath)
 	if err != nil {
@@ -196,13 +226,12 @@ func modifyConfig(ctx *cli.Context, mediators []*mp.MediatorConf) error {
 		return err
 	}
 
-	fmt.Println("Rewriting config file at:", configPath)
+	fmt.Println("Rewriting config file at: ", configPath)
 
 	return nil
 }
 
 func getGenesisPath(ctx *cli.Context) string {
-	// Make sure we have a valid genesis JSON
 	genesisOut := ctx.Args().First()
 
 	// If no path is specified, the default path is used
@@ -211,7 +240,11 @@ func getGenesisPath(ctx *cli.Context) string {
 		genesisOut = defaultGenesisJsonPath
 	}
 
-	return genesisOut
+	if files.IsDir(genesisOut) {
+		genesisOut = filepath.Join(genesisOut, filepath.Base(defaultGenesisJsonPath))
+	}
+
+	return common.GetAbsPath(genesisOut)
 }
 
 // initialAccount, create a initial account for a new account
@@ -234,33 +267,51 @@ func createExampleAccount(ctx *cli.Context) (addrStr, password string, err error
 }
 
 // createExampleGenesis, create the genesis state of new chain with the specified account
-func createExampleGenesis(tokenAccount string, mediators []*mp.MediatorConf, nodeInfo string) *core.Genesis {
+func createExampleGenesis() *core.Genesis {
 	SystemConfig := core.SystemConfig{
 		DepositRate:               core.DefaultDepositRate,
+		TxCoinYearRate:            core.DefaultTxCoinYearRate,
+		GenerateUnitReward:        core.DefaultGenerateUnitReward,
 		FoundationAddress:         core.DefaultFoundationAddress,
 		DepositAmountForMediator:  core.DefaultDepositAmountForMediator,
 		DepositAmountForJury:      core.DefaultDepositAmountForJury,
 		DepositAmountForDeveloper: core.DefaultDepositAmountForDeveloper,
 		DepositPeriod:             core.DefaultDepositPeriod,
+		UccMemory:core.DefaultUccMemory,
+		UccMemorySwap:core.DefaultUccMemorySwap,
+		UccCpuShares:core.DefaultUccCpuShares,
+		UccCpuPeriod:core.DefaultCpuPeriod,
+		UccCpuQuota:core.DefaultUccCpuQuota,
+		UccCpuSetCpus:core.DefaultUccCpuSetCpus,
+		TempUccMemory:core.DefaultTempUccMemory,
+		TempUccMemorySwap:core.DefaultTempUccMemorySwap,
+		TempUccCpuShares:core.DefaultTempUccCpuShares,
+		TempUccCpuQuota:core.DefaultTempUccCpuQuota,
 	}
-
+	DigitalIdentityConfig := core.DigitalIdentityConfig{
+		// default root ca holder, 默认是基金会地址
+		RootCAHolder: core.DefaultFoundationAddress,
+		RootCABytes:  core.DefaultRootCABytes,
+	}
 	initParams := core.NewChainParams()
+	mediators := []*mp.MediatorConf{mp.DefaultMediatorConf()}
 
 	return &core.Genesis{
-		Alias:        core.DefaultAlias,
-		Version:      configure.Version,
-		TokenAmount:  core.DefaultTokenAmount,
-		TokenDecimal: core.DefaultTokenDecimal,
-		ChainID:      core.DefaultChainID,
-		TokenHolder:  tokenAccount,
-
+		GasToken:    core.DefaultAlias,
+		Version:     configure.Version,
+		TokenAmount: core.DefaultTokenAmount,
+		//TokenDecimal:              core.DefaultTokenDecimal,
+		ChainID:                   core.DefaultChainID,
+		TokenHolder:               core.DefaultTokenHolder,
+		ParentUnitHeight:          -1,
 		Text:                      core.DefaultText,
 		SystemConfig:              SystemConfig,
+		DigitalIdentityConfig:     DigitalIdentityConfig,
 		InitialParameters:         initParams,
 		ImmutableParameters:       core.NewImmutChainParams(),
 		InitialTimestamp:          gen.InitialTimestamp(initParams.MediatorInterval),
 		InitialActiveMediators:    core.DefaultMediatorCount,
-		InitialMediatorCandidates: initialMediatorCandidates(mediators, nodeInfo),
+		InitialMediatorCandidates: initialMediatorCandidates(mediators, core.DefaultNodeInfo),
 	}
 }
 
@@ -276,4 +327,38 @@ func initialMediatorCandidates(mediators []*mp.MediatorConf, nodeInfo string) []
 	}
 
 	return initialMediators
+}
+
+func dumpJson(ctx *cli.Context) error {
+	genesis := createExampleGenesis()
+
+	genesisJson, err := json.MarshalIndent(*genesis, "", "  ")
+	if err != nil {
+		utils.Fatalf("%v", err)
+		return err
+	}
+
+	filePath := getGenesisPath(ctx)
+
+	err = os.MkdirAll(filepath.Dir(filePath), os.ModePerm)
+	if err != nil {
+		utils.Fatalf("%v", err)
+		return err
+	}
+
+	file, err1 := os.Create(filePath)
+	defer file.Close()
+	if err1 != nil {
+		utils.Fatalf("%v", err1)
+		return err1
+	}
+
+	_, err = file.Write(genesisJson)
+	if err != nil {
+		utils.Fatalf("%v", err)
+		return err
+	}
+
+	fmt.Println("Creating example genesis state in file: " + filePath)
+	return nil
 }

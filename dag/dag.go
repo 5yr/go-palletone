@@ -21,6 +21,7 @@ package dag
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,17 +32,18 @@ import (
 	"github.com/palletone/go-palletone/common/log"
 	"github.com/palletone/go-palletone/common/ptndb"
 	"github.com/palletone/go-palletone/configure"
-
-	"github.com/palletone/go-palletone/core/node"
+	"github.com/palletone/go-palletone/core/types"
 	dagcommon "github.com/palletone/go-palletone/dag/common"
+	"github.com/palletone/go-palletone/dag/dagconfig"
 	"github.com/palletone/go-palletone/dag/errors"
 	"github.com/palletone/go-palletone/dag/memunit"
 	"github.com/palletone/go-palletone/dag/modules"
+	"github.com/palletone/go-palletone/dag/parameter"
 	"github.com/palletone/go-palletone/dag/storage"
 	"github.com/palletone/go-palletone/dag/txspool"
 	"github.com/palletone/go-palletone/tokenengine"
 	"github.com/palletone/go-palletone/validator"
-	"sort"
+	"strconv"
 )
 
 type Dag struct {
@@ -60,10 +62,10 @@ type Dag struct {
 	propRep       dagcommon.IPropRepository
 	validate      validator.Validator
 	ChainHeadFeed *event.Feed
-	// GenesisUnit   *Unit  // comment by Albert·Gou
+
 	Mutex           sync.RWMutex
-	Memdag          memunit.IMemDag                      // memory unit
-	PartitionMemDag map[modules.IDType16]memunit.IMemDag //其他分区的MemDag
+	Memdag          memunit.IMemDag                     // memory unit
+	PartitionMemDag map[modules.AssetId]memunit.IMemDag //其他分区的MemDag
 	// memutxo
 	// 按unit单元划分存储Utxo
 	//utxos_cache map[common.Hash]map[modules.OutPoint]*modules.Utxo
@@ -74,8 +76,18 @@ type Dag struct {
 	activeMediatorsUpdatedScope event.SubscriptionScope
 
 	// append by albert·gou 用于account 各种投票数据统计
-	mediatorVoteTally voteTallys
-	totalVotingStake  uint64
+	mediatorVoteTally      voteTallys
+	totalVotingStake       uint64
+	mediatorCountHistogram []uint64
+	applyLock              sync.Mutex
+
+	//SPV
+	rmLogsFeed    event.Feed
+	chainFeed     event.Feed
+	chainSideFeed event.Feed
+	chainHeadFeed event.Feed
+	logsFeed      event.Feed
+	scope         event.SubscriptionScope
 }
 
 //type MemUtxos map[modules.OutPoint]*modules.Utxo
@@ -85,70 +97,18 @@ func (d *Dag) IsEmpty() bool {
 	return !it.Next()
 }
 
-func (d *Dag) CurrentUnit() *modules.Unit {
-
-	//nconfig := &node.DefaultConfig
-	//gasToken := nconfig.GetGasToken()
-	return d.Memdag.GetLastMainchainUnit()
-
-	//hash, _, err := d.propRep.GetNewestUnit(gasToken)
-	//if err != nil {
-	//	log.Error("Can not get newest unit by gas token"+gasToken.ToAssetId(), "error", err.Error())
-	//	return nil
-	//}
-	//unit, err := d.unstableUnitRep.GetUnit(hash)
-	//if err == nil {
-	//	log.Debugf("Get newest unit from memdag by hash:%s", hash.String())
-	//	return unit
-	//}
-	//log.Infof("Cannot get newest unit from memdag by hash:%s, try stable unit from db...", hash.String())
-	//hash, _, err = d.propRep.GetLastStableUnit(gasToken)
-	//if err != nil {
-	//	log.Error("Can not get last stable unit by gas token"+gasToken.ToAssetId(), "error", err.Error())
-	//	return nil
-	//}
-	//unit, err = d.unstableUnitRep.GetUnit(hash)
-	//if err != nil {
-	//	log.Error("Cannot get last stable unit from ldb", "error", err.Error())
-	//	return nil
-	//}
-	//return unit
-	//// step1. get current unit hash
-	//hash, err := d.GetHeadUnitHash()
-	//if err != nil {
-	//	log.Error("CurrentUnit when GetHeadUnitHash()", "error", err.Error())
-	//	return nil
-	//}
-	//// step2. get unit height
-	////height, err := d.GetUnitNumber(hash)
-	//// get unit header
-	//uHeader, err := d.unstableUnitRep.GetHeader(hash)
-	//if err != nil {
-	//	log.Error("Current unit when get unit header", "error", err.Error())
-	//	return nil
-	//}
-	//// get unit hash
-	//uHash := common.Hash{}
-	//uHash.SetBytes(hash.Bytes())
-	//// get transaction list
-	//txs, err := d.unstableUnitRep.GetUnitTransactions(uHash)
-	//if err != nil {
-	//	log.Error("Current unit when get transactions", "error", err.Error())
-	//	return nil
-	//}
-	//// generate unit
-	//unit := modules.Unit{
-	//	UnitHeader: uHeader,
-	//	UnitHash:   uHash,
-	//	Txs:        txs,
-	//}
-	//unit.UnitSize = unit.Size()
-	//return &unit
+func (d *Dag) CurrentUnit(token modules.AssetId) *modules.Unit {
+	return d.Memdag.GetLastMainchainUnit(token)
 }
 
-func (d *Dag) GetCurrentUnit(assetId modules.IDType16) *modules.Unit {
+func (d *Dag) GetMainCurrentUnit() *modules.Unit {
+	main_token := dagconfig.DagConfig.GetGasToken()
+	return d.Memdag.GetLastMainchainUnit(main_token)
+}
+
+func (d *Dag) GetCurrentUnit(assetId modules.AssetId) *modules.Unit {
 	memUnit := d.GetCurrentMemUnit(assetId, 0)
-	curUnit := d.CurrentUnit()
+	curUnit := d.CurrentUnit(assetId)
 
 	if memUnit == nil {
 		return curUnit
@@ -159,12 +119,9 @@ func (d *Dag) GetCurrentUnit(assetId modules.IDType16) *modules.Unit {
 	return memUnit
 }
 
-func (d *Dag) GetCurrentMemUnit(assetId modules.IDType16, index uint64) *modules.Unit {
-	curUnit := d.Memdag.GetLastMainchainUnit()
-	//if err != nil {
-	//	log.Info("GetCurrentMemUnit", "error", err.Error())
-	//	return nil
-	//}
+func (d *Dag) GetCurrentMemUnit(assetId modules.AssetId, index uint64) *modules.Unit {
+	curUnit := d.Memdag.GetLastMainchainUnit(assetId)
+
 	return curUnit
 }
 
@@ -174,6 +131,10 @@ func (d *Dag) HasUnit(hash common.Hash) bool {
 		return false
 	}
 	return u != nil
+}
+func (d *Dag) IsTransactionExist(hash common.Hash) bool {
+	return d.unstableUnitRep.IsTransactionExist(hash)
+
 }
 
 // confirm unit
@@ -197,13 +158,6 @@ func (d *Dag) ParentsIsConfirmByHash(hash common.Hash) bool {
 	}
 	return false
 }
-
-// GetMemUnitbyHash: get unit from memdag
-//func (d *Dag) GetMemUnitbyHash(hash common.Hash) (*modules.Unit, error) {
-//
-//	unit, err := d.Memdag.GetUnit(hash)
-//	return unit, err
-//}
 
 func (d *Dag) GetUnitByNumber(number *modules.ChainIndex) (*modules.Unit, error) {
 	//return d.unstableUnitRep.GetUnitFormIndex(number)
@@ -238,7 +192,7 @@ func (d *Dag) GetHeaderByHash(hash common.Hash) (*modules.Header, error) {
 	//	return nil
 	//}
 	// get unit header
-	uHeader, err := d.unstableUnitRep.GetHeader(hash)
+	uHeader, err := d.unstableUnitRep.GetHeaderByHash(hash)
 	if err != nil {
 		log.Debug("Current unit when get unit header", "error", err.Error())
 		return nil, err
@@ -259,13 +213,13 @@ func (d *Dag) GetHeaderByNumber(number *modules.ChainIndex) (*modules.Header, er
 	//}
 	uHeader, err1 := d.unstableUnitRep.GetHeaderByNumber(number)
 	if err1 != nil {
-		log.Debug("getChainUnit when GetHeader failed ", "error:", err1, "hash", number.String())
+		log.Info("getChainUnit when GetHeaderByNumber failed ", "error:", err1, "hash", number.String())
 		//log.Info("index info:", "height", number, "index", number.Index, "asset", number.AssetID, "ismain", number.IsMain)
 		return nil, err1
 	}
 	//uHeader, err1 := d.unstableUnitRep.GetHeaderByNumber(number)
 	//if err1 != nil {
-	//	log.Debug("GetUnit when GetHeader failed ", "error:", err1, "hash", number.String())
+	//	log.Debug("GetUnit when GetHeaderByHash failed ", "error:", err1, "hash", number.String())
 	//	//log.Info("index info:", "height", number, "index", number.Index, "asset", number.AssetID, "ismain", number.IsMain)
 	//	return nil, err1
 	//}
@@ -276,9 +230,9 @@ func (d *Dag) GetHeaderByNumber(number *modules.ChainIndex) (*modules.Header, er
 //	return d.unstableUnitRep.GetPrefix(*(*[]byte)(unsafe.Pointer(&prefix)))
 //}
 
-func (d *Dag) SubscribeChainHeadEvent(ch chan<- modules.ChainHeadEvent) event.Subscription {
-	return d.ChainHeadFeed.Subscribe(ch)
-}
+//func (d *Dag) SubscribeChainHeadEvent(ch chan<- modules.ChainHeadEvent) event.Subscription {
+//	return d.ChainHeadFeed.Subscribe(ch)
+//}
 
 // FastSyncCommitHead sets the current head block to the one defined by the hash
 // irrelevant what the chain contents were prior.
@@ -302,13 +256,11 @@ func (d *Dag) FastSyncCommitHead(hash common.Hash) error {
 // After insertion is done, all accumulated events will be fired.
 // reference : Eth InsertChain
 func (d *Dag) InsertDag(units modules.Units, txpool txspool.ITxPool) (int, error) {
-	//TODO must recover，不连续的孤儿unit也应当存起来，以方便后面处理
-	defer func(start time.Time) {
-		if len(units) > 0 {
-			log.Debug("Dag InsertDag", "elapsed", time.Since(start), "unit index start", units[0].UnitHeader.Number.Index, "size:", len(units))
-		}
+	// var (
+	// 	events = make([]interface{}, 0, len(units))
+	// 	coalescedLogs []*types.Log
+	// )
 
-	}(time.Now())
 	count := int(0)
 	for i, u := range units {
 		// todo 此处应判断第0个unit的父unit是否已存入本节点
@@ -329,23 +281,28 @@ func (d *Dag) InsertDag(units modules.Units, txpool txspool.ITxPool) (int, error
 				units[i].UnitHeader.Number.Index, units[i].UnitHash)
 		}
 
+		timestamp := time.Unix(u.Timestamp(), 0)
+		log.Infof("InsertDag unit(%v) #%v parent(%v) @%v signed by %v", u.UnitHash.TerminalString(),
+			u.NumberU64(), u.ParentHash()[0].TerminalString(), timestamp.Format("2006-01-02 15:04:05"),
+			u.Author().Str())
+
 		// append by albert·gou, 利用 unit 更新相关状态
-		time := time.Unix(u.Timestamp(), 0)
-		log.Info(fmt.Sprint("Received unit "+u.UnitHash.TerminalString()+" #", u.NumberU64(),
-			" @", time.Format("2006-01-02 15:04:05"), " signed by ", u.Author().Str()))
 		d.ApplyUnit(u)
 
 		// todo 应当和本地生产的unit统一接口，而不是直接存储
-		// modified by albert·gou
 		//if err := d.unstableUnitRep.SaveUnit(u, false); err != nil {
 		if err := d.SaveUnit(u, txpool, false); err != nil {
-			fmt.Errorf("Insert dag, save error: %s", err.Error())
 			return count, err
 		}
+
 		//d.updateLastIrreversibleUnitNum(u.Hash(), uint64(u.NumberU64()))
-		log.Debug("Dag", "InsertDag ok index:", u.UnitHeader.Number.Index, "hash:", u.Hash())
+		//log.Debug("Dag", "InsertDag ok index:", u.UnitHeader.Number.Index, "hash:", u.Hash())
 		count += 1
+		// events = append(events, modules.ChainEvent{u, common.Hash{}, nil})
 	}
+
+	//TODO add PostChainEvents
+	// d.PostChainEvents(events, coalescedLogs)
 
 	return count, nil
 }
@@ -364,7 +321,7 @@ func (d *Dag) GetUnitHashesFromHash(hash common.Hash, max uint64) []common.Hash 
 			break
 		}
 		next := header.ParentsHash[0]
-		h, err := d.unstableUnitRep.GetHeader(next)
+		h, err := d.unstableUnitRep.GetHeaderByHash(next)
 		if err != nil {
 			break
 		}
@@ -374,12 +331,12 @@ func (d *Dag) GetUnitHashesFromHash(hash common.Hash, max uint64) []common.Hash 
 	return chain
 }
 
-// need add:   assetId modules.IDType16, onMain bool
+// need add:   assetId modules.AssetId, onMain bool
 func (d *Dag) HasHeader(hash common.Hash, number uint64) bool {
 	h, _ := d.GetHeaderByHash(hash)
 	return h != nil
 }
-func (d *Dag) Exists(hash common.Hash) bool {
+func (d *Dag) IsHeaderExist(hash common.Hash) bool {
 	//if unit, err := d.unstableUnitRep.getChainUnit(hash); err == nil && unit != nil {
 	//	log.Debug("hash is exsit in leveldb ", "index:", unit.Header().Number.Index, "hash", hash.String())
 	//	return true
@@ -388,8 +345,8 @@ func (d *Dag) Exists(hash common.Hash) bool {
 	exist, _ := d.unstableUnitRep.IsHeaderExist(hash)
 	return exist
 }
-func (d *Dag) CurrentHeader() *modules.Header {
-	unit := d.CurrentUnit()
+func (d *Dag) CurrentHeader(token modules.AssetId) *modules.Header {
+	unit := d.CurrentUnit(token)
 	if unit != nil {
 		return unit.Header()
 	}
@@ -413,23 +370,22 @@ func (d *Dag) GetUnitTxsHash(hash common.Hash) ([]common.Hash, error) {
 }
 
 // GetTransactionByHash is return the tx by tx's hash
-func (d *Dag) GetTransactionByHash(hash common.Hash) (*modules.Transaction, common.Hash, error) {
-	tx, uhash, _, _ := d.unstableUnitRep.GetTransaction(hash)
-	if tx == nil {
-		return nil, uhash, errors.New("get transaction by hash is failed,none the transaction.")
-	}
-	return tx, uhash, nil
-}
-func (d *Dag) GetTransaction(hash common.Hash) (*modules.Transaction, common.Hash, uint64, uint64) {
+//func (d *Dag) GetTransactionByHash(hash common.Hash) (*modules.Transaction, common.Hash, error) {
+//	tx, uhash, _, _, err := d.unstableUnitRep.GetTransaction(hash)
+//	if err != nil {
+//		return nil, uhash, errors.New("get transaction by hash is failed,none the transaction.")
+//	}
+//	return tx, uhash, nil
+//}
+func (d *Dag) GetTransaction(hash common.Hash) (*modules.TransactionWithUnitInfo, error) {
 	return d.unstableUnitRep.GetTransaction(hash)
 }
+func (d *Dag) GetTransactionOnly(hash common.Hash) (*modules.Transaction, error) {
+	return d.unstableUnitRep.GetTransactionOnly(hash)
+}
 func (d *Dag) GetTxSearchEntry(hash common.Hash) (*modules.TxLookupEntry, error) {
-	unitHash, unitNumber, txIndex, err := d.unstableUnitRep.GetTxLookupEntry(hash)
-	return &modules.TxLookupEntry{
-		UnitHash:  unitHash,
-		UnitIndex: unitNumber,
-		Index:     txIndex,
-	}, err
+	txlookup, err := d.unstableUnitRep.GetTxLookupEntry(hash)
+	return txlookup, err
 }
 
 // InsertHeaderDag attempts to insert the given header chain in to the local
@@ -454,11 +410,12 @@ func (d *Dag) InsertHeaderDag(headers []*modules.Header) (int, error) {
 
 //VerifyHeader checks whether a header conforms to the consensus rules of the stock
 //Ethereum ethash engine.go
-func (d *Dag) VerifyHeader(header *modules.Header, seal bool) error {
+func (d *Dag) VerifyHeader(header *modules.Header) error {
 	// step1. check unit signature, should be compare to mediator list
 	unitState := d.validate.ValidateHeader(header)
 	if unitState != nil {
-		return fmt.Errorf("Validate unit signature error, errno=%s", unitState.Error())
+		log.Errorf("Validate unit header error, errno=%s", unitState.Error())
+		return unitState
 	}
 
 	// step2. check extra data
@@ -470,12 +427,6 @@ func (d *Dag) VerifyHeader(header *modules.Header, seal bool) error {
 	return nil
 }
 
-//All leaf nodes for dag downloader.
-//MUST have Priority.
-//func (d *Dag) GetAllLeafNodes() ([]*modules.Header, error) {
-//	return d.unstableUnitRep.GetAllLeafNodes()
-//}
-
 /**
 获取account address下面的token信息
 To get account token list and tokens's information
@@ -485,8 +436,8 @@ To get account token list and tokens's information
 //}
 //
 //func (d *Dag) WalletBalance(address common.Address, assetid []byte, uniqueid []byte, chainid uint64) (uint64, error) {
-//	newAssetid := modules.IDType16{}
-//	newUnitqueid := modules.IDType16{}
+//	newAssetid := modules.AssetId{}
+//	newUnitqueid := modules.AssetId{}
 //
 //	if len(assetid) != cap(newAssetid) {
 //		return 0, fmt.Errorf("Assetid lenth is wrong")
@@ -530,15 +481,15 @@ func NewDag(db ptndb.Database) (*Dag, error) {
 
 	utxoRep := dagcommon.NewUtxoRepository(utxoDb, idxDb, stateDb)
 	unitRep := dagcommon.NewUnitRepository(dagDb, idxDb, utxoDb, stateDb, propDb)
-	validate := validator.NewValidate(dagDb, utxoRep, stateDb)
 	propRep := dagcommon.NewPropRepository(propDb)
 	stateRep := dagcommon.NewStateRepository(stateDb)
 	//hash, idx, _ := propRep.GetLastStableUnit(modules.PTNCOIN)
-	unstableChain := memunit.NewMemDag(modules.PTNCOIN, false, db, unitRep, propRep)
+	gasToken := dagconfig.DagConfig.GetGasToken()
+	unstableChain := memunit.NewMemDag(gasToken, false, db, unitRep, propRep)
 	tunitRep, tutxoRep, tstateRep := unstableChain.GetUnstableRepositories()
-
-	partitionMemdag := make(map[modules.IDType16]memunit.IMemDag)
-	for _, ptoken := range node.DefaultConfig.GeSyncPartitionTokens() {
+	validate := validator.NewValidate(tunitRep, tutxoRep, tstateRep)
+	partitionMemdag := make(map[modules.AssetId]memunit.IMemDag)
+	for _, ptoken := range dagconfig.DagConfig.GeSyncPartitionTokens() {
 		partitionMemdag[ptoken] = memunit.NewMemDag(ptoken, true, db, unitRep, propRep)
 	}
 
@@ -626,6 +577,7 @@ func NewDagForTest(db ptndb.Database, txpool txspool.ITxPool) (*Dag, error) {
 func (d *Dag) GetContract(id []byte) (*modules.Contract, error) {
 	return d.unstableStateRep.GetContract(id)
 }
+
 func (d *Dag) GetContractDeploy(tempId, contractId []byte, name string) (*modules.ContractDeployPayload, error) {
 	return d.unstableStateRep.GetContractDeploy(tempId, contractId, name)
 }
@@ -635,7 +587,6 @@ func (d *Dag) GetUnitNumber(hash common.Hash) (*modules.ChainIndex, error) {
 	return d.unstableUnitRep.GetNumberWithUnitHash(hash)
 }
 
-//
 //// GetCanonicalHash
 //func (d *Dag) GetCanonicalHash(number uint64) (common.Hash, error) {
 //	return d.unstableUnitRep.GetCanonicalHash(number)
@@ -686,6 +637,7 @@ func (d *Dag) GetUtxoEntry(outpoint *modules.OutPoint) (*modules.Utxo, error) {
 //	defer d.Mutex.RUnlock()
 //	return d.utxodb.GetUtxoPkScripHexByTxhash(txhash, mindex, outindex)
 //}
+
 func (d *Dag) GetUtxoView(tx *modules.Transaction) (*txspool.UtxoViewpoint, error) {
 	neededSet := make(map[modules.OutPoint]struct{})
 	//preout := modules.OutPoint{TxHash: tx.Hash()}
@@ -724,11 +676,13 @@ func (d *Dag) GetUtxoView(tx *modules.Transaction) (*txspool.UtxoViewpoint, erro
 
 	return view, err
 }
+
 func (d *Dag) GetUtxosOutViewbyTx(tx *modules.Transaction) *txspool.UtxoViewpoint {
 	view := txspool.NewUtxoViewpoint()
 	view.AddTxOuts(tx)
 	return view
 }
+
 func (d *Dag) GetUtxosOutViewbyUnit(unit *modules.Unit) *txspool.UtxoViewpoint {
 	txs := unit.Transactions()
 	view := txspool.NewUtxoViewpoint()
@@ -772,20 +726,38 @@ func (d *Dag) GetTxFromAddress(tx *modules.Transaction) ([]common.Address, error
 	return d.unstableUnitRep.GetTxFromAddress(tx)
 }
 
-//func (d *Dag) GetAddrOutput(addr string) ([]modules.Output, error) {
-//	return d.unstableUnitRep.GetAddrOutput(addr)
-//}
+func (d *Dag) GetAssetTxHistory(asset *modules.Asset) ([]*modules.TransactionWithUnitInfo, error) {
+	return d.unstableUnitRep.GetAssetTxHistory(asset)
+}
 
 func (d *Dag) GetAddr1TokenUtxos(addr common.Address, asset *modules.Asset) (map[modules.OutPoint]*modules.Utxo, error) {
-	all, err := d.unstableUtxoRep.GetAddrUtxos(addr)
+	all, err := d.unstableUtxoRep.GetAddrUtxos(addr, asset)
 	return all, err
 }
 
 func (d *Dag) GetAddrUtxos(addr common.Address) (map[modules.OutPoint]*modules.Utxo, error) {
 
-	all, err := d.unstableUtxoRep.GetAddrUtxos(addr)
+	all, err := d.unstableUtxoRep.GetAddrUtxos(addr, nil)
 
 	return all, err
+}
+
+//TODO Devin 换届后请调用该函数
+func (d *Dag) RefreshSysParameters() {
+	deposit, _, _ := d.unstableStateRep.GetConfig("DepositRate")
+	depositYearRate, _ := strconv.ParseFloat(string(deposit), 64)
+	parameter.CurrentSysParameters.DepositContractInterest = depositYearRate / 365
+	log.Debugf("Load SysParameter DepositContractInterest value:%f", parameter.CurrentSysParameters.DepositContractInterest)
+	txCoinYearRateStr, _, _ := d.unstableStateRep.GetConfig("TxCoinYearRate")
+	txCoinYearRate, _ := strconv.ParseFloat(string(txCoinYearRateStr), 64)
+	parameter.CurrentSysParameters.TxCoinDayInterest = txCoinYearRate / 365
+	log.Debugf("Load SysParameter TxCoinDayInterest value:%f", parameter.CurrentSysParameters.TxCoinDayInterest)
+
+	generateUnitRewardStr, _, _ := d.unstableStateRep.GetConfig("GenerateUnitReward")
+	generateUnitReward, _ := strconv.ParseUint(string(generateUnitRewardStr), 10, 64)
+	parameter.CurrentSysParameters.GenerateUnitReward = generateUnitReward
+	log.Debugf("Load SysParameter GenerateUnitReward value:%d", parameter.CurrentSysParameters.GenerateUnitReward)
+
 }
 
 //func (d *Dag) SaveUtxoView(view *txspool.UtxoViewpoint) error {
@@ -793,7 +765,7 @@ func (d *Dag) GetAddrUtxos(addr common.Address) (map[modules.OutPoint]*modules.U
 //	return d.unstableUtxoRep.SaveUtxoView(view.Entries())
 //}
 
-func (d *Dag) GetAddrTransactions(addr string) (map[string]modules.Transactions, error) {
+func (d *Dag) GetAddrTransactions(addr common.Address) ([]*modules.TransactionWithUnitInfo, error) {
 	return d.unstableUnitRep.GetAddrTransactions(addr)
 }
 
@@ -812,20 +784,20 @@ func (d *Dag) GetContractStatesById(id []byte) (map[string]*modules.ContractStat
 	return d.unstableStateRep.GetContractStatesById(id)
 }
 
-func (d *Dag) CreateUnit(mAddr *common.Address, txpool txspool.ITxPool, t time.Time) ([]modules.Unit, error) {
-	return d.unstableUnitRep.CreateUnit(mAddr, txpool, t)
+func (d *Dag) GetContractStatesByPrefix(id []byte, prefix string) (map[string]*modules.ContractStateValue, error) {
+	return d.unstableStateRep.GetContractStatesByPrefix(id, prefix)
 }
 
-//modified by Albert·Gou
-//func (d *Dag) SaveUnit4GenesisInit(unit *modules.Unit, txpool txspool.ITxPool) error {
-//	return d.stableUnitRep.SaveUnit(unit, true)
-//}
+func (d *Dag) CreateUnit(mAddr *common.Address, txpool txspool.ITxPool, t time.Time) (*modules.Unit, error) {
+	return d.unstableUnitRep.CreateUnit(mAddr, txpool, t)
+}
 
 func (d *Dag) saveHeader(header *modules.Header) error {
 	unit := &modules.Unit{UnitHeader: header}
 	asset := header.Number.AssetID
 	var memdag memunit.IMemDag
-	if asset == modules.PTNCOIN {
+	gasToken := dagconfig.DagConfig.GetGasToken()
+	if asset == gasToken {
 		memdag = d.Memdag
 	} else {
 		memdag = d.PartitionMemDag[asset]
@@ -841,22 +813,14 @@ func (d *Dag) saveHeader(header *modules.Header) error {
 func (d *Dag) SaveUnit(unit *modules.Unit, txpool txspool.ITxPool, isGenesis bool) error {
 	// todo 应当根据新的unit判断哪条链作为主链
 	// step1. check exists
-	//var parent_hash common.Hash
-	//if !isGenesis {
-	//	parent_hash = unit.ParentHash()[0]
-	//} else {
-	//	parent_hash = unit.Hash()
-	//}
-
-	//log.Debug("start save dag", "index", unit.UnitHeader.Index(), "hash", unit.Hash())
 
 	if !isGenesis {
-		if d.Exists(unit.Hash()) {
+		if d.IsHeaderExist(unit.Hash()) {
 			log.Debug("dag:the unit is already exist in leveldb. ", "unit_hash", unit.Hash().String())
-			return errors.ErrUnitExist //fmt.Errorf("SaveDag, unit(%s) is already existing.", unit.Hash().String())
+			return errors.ErrUnitExist
 		}
 		// step2. validate unit
-		err := d.validate.ValidateUnitExceptGroupSig(unit)
+		err := d.validateUnit(unit)
 		if err != nil {
 			return fmt.Errorf("SaveDag, validate unit error, err=%s", err.Error())
 		}
@@ -995,19 +959,10 @@ func (d *Dag) SaveUnit(unit *modules.Unit, txpool txspool.ITxPool, isGenesis boo
 //	return true, nil
 //}
 
-//func (d *Dag) GetAccountMediatorVote(address common.Address) []common.Address {
-//	// todo
-//	bAddress := d.statedb.GetAccountVoteInfo(address, vote.TYPE_MEDIATOR)
-//	res := []common.Address{}
-//	for _, b := range bAddress {
-//		res = append(res, common.BytesToAddress(b))
-//	}
-//	return res
-//}
-
 func (d *Dag) CreateUnitForTest(txs modules.Transactions) (*modules.Unit, error) {
 	// get current unit
-	currentUnit := d.CurrentUnit()
+	token := modules.PTNCOIN
+	currentUnit := d.CurrentUnit(token)
 	if currentUnit == nil {
 		return nil, fmt.Errorf("CreateUnitForTest ERROR: genesis unit is null")
 	}
@@ -1021,10 +976,10 @@ func (d *Dag) CreateUnitForTest(txs modules.Transactions) (*modules.Unit, error)
 	unitHeader := modules.Header{
 		ParentsHash: []common.Hash{currentUnit.UnitHash},
 		//Authors:      nil,
-		GroupSign:    make([]byte, 0),
-		GroupPubKey:  make([]byte, 0),
-		Number:       height,
-		Creationdate: time.Now().Unix(),
+		GroupSign:   make([]byte, 0),
+		GroupPubKey: make([]byte, 0),
+		Number:      height,
+		Time:        time.Now().Unix(),
 	}
 
 	sAddr := "P1NsG3kiKJc87M6Di6YriqHxqfPhdvxVj2B"
@@ -1040,7 +995,14 @@ func (d *Dag) CreateUnitForTest(txs modules.Transactions) (*modules.Unit, error)
 	if err := rlp.DecodeBytes(bAsset, &asset); err != nil {
 		return nil, fmt.Errorf("Create unit: %s", err.Error())
 	}
-	coinbase, _, err := dagcommon.CreateCoinbase(&addr, 0, nil, &asset, time.Now())
+	ad := &modules.Addition{
+		Addr:   addr,
+		Asset:  asset,
+		Amount: 0,
+	}
+	ads := make([]*modules.Addition, 0)
+	ads = append(ads, ad)
+	coinbase, _, err := dagcommon.CreateCoinbase(ads, time.Now())
 	if err != nil {
 		log.Error(err.Error())
 		return nil, err
@@ -1067,56 +1029,13 @@ func (d *Dag) GetContractTpl(templateID []byte) (version *modules.StateVersion, 
 	return d.unstableStateRep.GetContractTpl(templateID)
 }
 
-//@Yiran
-func (d *Dag) GetCurrentUnitIndex() (*modules.ChainIndex, error) {
-	currentUnitHash := d.CurrentUnit().UnitHash
-	return d.GetUnitNumber(currentUnitHash)
+func (d *Dag) GetCurrentUnitIndex(token modules.AssetId) (*modules.ChainIndex, error) {
+	currentUnit := d.CurrentUnit(token)
+	//	return d.GetUnitNumber(currentUnitHash)
+	return currentUnit.Number(), nil
 }
 
-//@Yiran save utxo snapshot when new mediator cycle begin
-// unit index MUST to be  integer multiples of  termInterval.
-//func (d *Dag) SaveUtxoSnapshot() error {
-//	currentUnitIndex, err := d.GetCurrentUnitIndex()
-//	if err != nil {
-//		return err
-//	}
-//	return d.utxodb.SaveUtxoSnapshot(currentUnitIndex)
-//}
-
-//@Yiran Get last utxo snapshot
-// must calling after SaveUtxoSnapshot call , before this mediator cycle end.
-// called by GenerateVoteResult
-//func (d *Dag) GetUtxoSnapshot() (*[]modules.Utxo, error) {
-//	unitIndex, err := d.GetCurrentUnitIndex()
-//	if err != nil {
-//		return nil, err
-//	}
-//	unitIndex.Index -= unitIndex.Index % modules.TERMINTERVAL
-//	return d.utxodb.GetUtxoEntities(unitIndex)
-//}
-
-////@Yiran
-//func (d *Dag) GenerateVoteResult() (*[]storage.AddressVote, error) {
-//	AddressVoteBox := storage.NewAddressVoteBox()
-//
-//	utxos, err := d.utxodb.GetAllUtxos()
-//	if err != nil {
-//		return nil, err
-//	}
-//	for _, utxo := range utxos {
-//		if utxo.Asset.AssetId == modules.PTNCOIN {
-//			utxoHolder, err := tokenengine.GetAddressFromScript(utxo.PkScript)
-//			if err != nil {
-//				return nil, err
-//			}
-//			AddressVoteBox.AddToBoxIfNotVoted(utxoHolder, utxo.VoteResult)
-//		}
-//	}
-//	AddressVoteBox.Sort()
-//	return &AddressVoteBox.Candidates, nil
-//}
-
-//func UtxoFilter(utxos map[modules.OutPoint]*modules.Utxo, assetId modules.IDType16) []*modules.Utxo {
+//func UtxoFilter(utxos map[modules.OutPoint]*modules.Utxo, assetId modules.AssetId) []*modules.Utxo {
 //	res := make([]*modules.Utxo, 0)
 //	for _, utxo := range utxos {
 //		if utxo.Asset.AssetId == assetId {
@@ -1124,68 +1043,6 @@ func (d *Dag) GetCurrentUnitIndex() (*modules.ChainIndex, error) {
 //		}
 //	}
 //	return res
-//}
-
-////@Yiran
-//func (d *Dag) UpdateActiveMediators() error {
-//	var TermInterval uint64 = 50
-//	MediatorNumber := d.ActiveMediatorsCount()
-//	// <1> Get election unit
-//	hash := d.CurrentUnit().UnitHash
-//	index, err := d.GetUnitNumber(hash)
-//	if err != nil {
-//		return err
-//	}
-//	if index.Index <= TermInterval {
-//		return errors.New("first election must wait until first term period end")
-//		//adjust TermInterval to fit the unit number
-//		//TermInterval = index.Index
-//	}
-//	index.Index -= index.Index % TermInterval
-//	d.GetUnitByNumber(index).
-//
-//	//// <2> Get all votes belonged to this election period
-//	//voteBox := storage.AddressVoteBox{}
-//	//for i := TermInterval; i > 0; i-- { // for each unit in period.
-//	//	for _, Tx := range d.GetUnitByNumber(index).Txs { //for each transaction in unit
-//	//		voter := Tx.TxMessages.GetInputAddress()
-//	//		voteTo := Tx.TxMessages.GetVoteResult()
-//	//		voteBox.AddToBoxIfNotVoted(voter, voteTo)
-//	//	}
-//	//}
-//
-//	// <3> calculate vote result
-//	addresses := voteBox.Head(MediatorNumber) //sort by candidates vote number & return the addresses of the top n account
-//
-//	// <4> create active mediators from addresses & update globalProperty
-//	activeMediators := make(map[common.Address]core.Mediator, 0)
-//	for _, addr := range (addresses) {
-//		newmediator := *d.GetGlobalProp().GetActiveMediator(addr)
-//		activeMediators[addr] = newmediator
-//	}
-//
-//	return nil
-//}
-
-//GetElectedMediatorsAddress YiRan@
-//func (dag *Dag) GetElectedMediatorsAddress() (map[string]uint64, error) {
-//	//gp, err := dag.propdb.RetrieveGlobalProp()
-//	//if err != nil {
-//	//	return nil, err
-//	//}
-//	//MediatorNumber := gp.ActiveMediatorsCount()
-//	return dag.statedb.GetSortedMediatorVote(0)
-//}
-
-// UpdateMediator
-//func (d *Dag) UpdateMediator() error {
-//	mas, err := d.GetElectedMediatorsAddress()
-//	if err != nil {
-//		return err
-//	}
-//	fmt.Println(mas)
-//	//TODO
-//	return nil
 //}
 
 // dag's common geter
@@ -1198,7 +1055,7 @@ func (d *Dag) GetCommonByPrefix(prefix []byte) map[string][]byte {
 	return d.unstableUnitRep.GetCommonByPrefix(prefix)
 }
 
-//func (d *Dag) GetCurrentChainIndex(assetId modules.IDType16) (*modules.ChainIndex, error) {
+//func (d *Dag) GetCurrentChainIndex(assetId modules.AssetId) (*modules.ChainIndex, error) {
 //	return d.unstableStateRep.GetCurrentChainIndex(assetId)
 //}
 
@@ -1303,7 +1160,7 @@ func (d *Dag) GetFileInfo(filehash []byte) ([]*modules.FileInfo, error) {
 func (d *Dag) GetLightHeaderByHash(headerHash common.Hash) (*modules.Header, error) {
 	return nil, nil
 }
-func (d *Dag) GetLightChainHeight(assetId modules.IDType16) uint64 {
+func (d *Dag) GetLightChainHeight(assetId modules.AssetId) uint64 {
 	return uint64(0)
 }
 func (d *Dag) InsertLightHeader(headers []*modules.Header) (int, error) {
@@ -1313,3 +1170,72 @@ func (d *Dag) InsertLightHeader(headers []*modules.Header) (int, error) {
 	}
 	return d.InsertHeaderDag(headers)
 }
+
+//All leaf nodes for dag downloader.
+//MUST have Priority.
+//根据资产Id返回所有链的header。
+func (d *Dag) GetAllLeafNodes() ([]*modules.Header, error) {
+	// step1: get all AssetId
+
+	return []*modules.Header{}, nil
+}
+
+func (d *Dag) UpdateSysParams() error {
+	version := &modules.StateVersion{}
+	//Height: &modules.ChainIndex{Index: 123, IsMain: true}, TxIndex: 1
+	unit := d.GetMainCurrentUnit()
+	version.Height = unit.UnitHeader.Number
+	version.TxIndex = 0
+	return d.stableStateRep.UpdateSysParams(version)
+}
+
+//SPV
+// SubscribeRemovedLogsEvent registers a subscription of RemovedLogsEvent.
+func (bc *Dag) SubscribeRemovedLogsEvent(ch chan<- modules.RemovedLogsEvent) event.Subscription {
+	return bc.scope.Track(bc.rmLogsFeed.Subscribe(ch))
+}
+
+// SubscribeChainHeadEvent registers a subscription of ChainHeadEvent.
+func (bc *Dag) SubscribeChainHeadEvent(ch chan<- modules.ChainHeadEvent) event.Subscription {
+	return bc.scope.Track(bc.chainHeadFeed.Subscribe(ch))
+}
+
+// SubscribeLogsEvent registers a subscription of []*types.Log.
+func (bc *Dag) SubscribeLogsEvent(ch chan<- []*types.Log) event.Subscription {
+	return bc.scope.Track(bc.logsFeed.Subscribe(ch))
+}
+
+// SubscribeChainEvent registers a subscription of ChainEvent.
+func (bc *Dag) SubscribeChainEvent(ch chan<- modules.ChainEvent) event.Subscription {
+	return bc.scope.Track(bc.chainFeed.Subscribe(ch))
+}
+
+// PostChainEvents iterates over the events generated by a chain insertion and
+// posts them into the event feed.
+// TODO: Should not expose PostChainEvents. The chain events should be posted in WriteBlock.
+func (bc *Dag) PostChainEvents(events []interface{}) {
+	log.Debug("enter PostChainEvents")
+	// post event logs for further processing
+	//if logs != nil {
+	//	bc.logsFeed.Send(logs)
+	//}
+	for _, event := range events {
+		switch ev := event.(type) {
+		case modules.ChainEvent:
+			log.Debug("======PostChainEvents======", "ev", ev)
+			bc.chainFeed.Send(ev)
+
+		case modules.ChainHeadEvent:
+			log.Debug("======PostChainHeadEvent======", "ev", ev)
+			bc.chainHeadFeed.Send(ev)
+
+			//case modules.ChainSideEvent:
+			//	bc.chainSideFeed.Send(ev)
+		}
+	}
+}
+
+// SubscribeChainSideEvent registers a subscription of ChainSideEvent.
+//func (bc *Dag) SubscribeChainSideEvent(ch chan<- ChainSideEvent) event.Subscription {
+//	return bc.scope.Track(bc.chainSideFeed.Subscribe(ch))
+//}

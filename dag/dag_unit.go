@@ -21,128 +21,85 @@
 package dag
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/palletone/go-palletone/common"
 	"github.com/palletone/go-palletone/common/log"
 	"github.com/palletone/go-palletone/core/accounts/keystore"
-	"github.com/palletone/go-palletone/core/node"
+	// "github.com/palletone/go-palletone/core/types"
 	dagcommon "github.com/palletone/go-palletone/dag/common"
+	"github.com/palletone/go-palletone/dag/dagconfig"
 	"github.com/palletone/go-palletone/dag/modules"
 	"github.com/palletone/go-palletone/dag/txspool"
 )
-
-func (dag *Dag) setUnitHeader(pendingUnit *modules.Unit) {
-	phash, current_index, _ := dag.propRep.GetNewestUnit(pendingUnit.UnitHeader.ChainIndex().AssetID)
-	//current_index, _ := dag.GetCurrentChainIndex(pendingUnit.UnitHeader.ChainIndex().AssetID)
-
-	//if len(pendingUnit.UnitHeader.AssetIDs) > 0 {
-	//
-	//	curMemUnit := dag.GetCurrentMemUnit(pendingUnit.UnitHeader.AssetIDs[0], current_index.Index)
-	//	curUnit := dag.GetCurrentUnit(pendingUnit.UnitHeader.AssetIDs[0])
-	//
-	//	if curMemUnit != nil {
-	//
-	//		if curMemUnit.UnitHeader.Index() > curUnit.UnitHeader.Index() {
-	//			pendingUnit.UnitHeader.ParentsHash = append(pendingUnit.UnitHeader.ParentsHash, curMemUnit.UnitHash)
-	//			//pendingUnit.UnitHeader.Number = curMemUnit.UnitHeader.Number
-	//			pendingUnit.UnitHeader.Number = modules.CopyChainIndex(curMemUnit.UnitHeader.Number)
-	//			pendingUnit.UnitHeader.Number.Index += 1
-	//		} else {
-	//			pendingUnit.UnitHeader.ParentsHash = append(pendingUnit.UnitHeader.ParentsHash, curUnit.UnitHash)
-	//			//pendingUnit.UnitHeader.Number = curUnit.UnitHeader.Number
-	//			pendingUnit.UnitHeader.Number = modules.CopyChainIndex(curUnit.UnitHeader.Number)
-	//			pendingUnit.UnitHeader.Number.Index += 1
-	//		}
-	//	} else {
-	//		pendingUnit.UnitHeader.ParentsHash = append(pendingUnit.UnitHeader.ParentsHash, curUnit.UnitHash)
-	//		//pendingUnit.UnitHeader.Number = curUnit.UnitHeader.Number
-	//		pendingUnit.UnitHeader.Number = modules.CopyChainIndex(curUnit.UnitHeader.Number)
-	//		pendingUnit.UnitHeader.Number.Index += 1
-	//	}
-	//
-	//} else
-	{
-		//pendingUnit.UnitHeader.Number = current_index
-		pendingUnit.UnitHeader.Number = modules.CopyChainIndex(current_index)
-		pendingUnit.UnitHeader.Number.Index = current_index.Index + 1
-
-		pendingUnit.UnitHeader.ParentsHash =
-			append(pendingUnit.UnitHeader.ParentsHash, phash) //dag.HeadUnitHash()
-	}
-
-	if pendingUnit.UnitHeader.Number == nil {
-		pendingUnit.UnitHeader.Number = modules.CopyChainIndex(current_index)
-		pendingUnit.UnitHeader.Number.Index += 1
-	} else {
-		log.Debug("the pending unit header number index info. ", "index", pendingUnit.UnitHeader.Number.String())
-	}
-}
 
 // GenerateUnit, generate unit
 // @author Albert·Gou
 func (dag *Dag) GenerateUnit(when time.Time, producer common.Address, groupPubKey []byte,
 	ks *keystore.KeyStore, txpool txspool.ITxPool) *modules.Unit {
-	//defer func(start time.Time) {
-	//	log.Debug("GenerateUnit unit elapsed", "elapsed", time.Since(start))
-	//}(time.Now())
-	gasToken := node.DefaultConfig.GetGasToken()
+	t0 := time.Now()
+	defer func(start time.Time) {
+		log.Debugf("GenerateUnit cost time: %v", time.Since(start))
+	}(t0)
+
+	gasToken := dagconfig.DagConfig.GetGasToken()
 
 	// 1. 判断是否满足生产的若干条件
 
 	//检查NewestUnit是否存在，不存在则从MemDag获取最新的Unit作为NewestUnit
+	// todo 应当在其他地方其他时刻更新该值
 	hash, chainIndex, _ := dag.propRep.GetNewestUnit(gasToken)
-	if !dag.Exists(hash) {
-		log.Debugf("Newest unit[%s] not exist in memdag, retrieve another from memdag and update NewestUnit.index [%d]", hash.String(), chainIndex.Index)
-		newestUnit := dag.Memdag.GetLastMainchainUnit()
+	if !dag.IsHeaderExist(hash) {
+		log.Debugf("Newest unit[%s] not exist in dag, retrieve another from memdag "+
+			"and update NewestUnit.index [%d]", hash.String(), chainIndex.Index)
+		newestUnit := dag.Memdag.GetLastMainchainUnit(gasToken)
 		if nil != newestUnit {
 			dag.propRep.SetNewestUnit(newestUnit.Header())
 		}
 	}
-	// 2. 生产验证单元，添加交易集、时间戳、签名
-	newUnits, err := dag.CreateUnit(&producer, txpool, when)
+
+	// 2. 生产unit，添加交易集、时间戳、签名
+	newUnit, err := dag.CreateUnit(&producer, txpool, when)
 	if err != nil {
 		log.Debug("GenerateUnit", "error", err.Error())
 		return nil
 	}
 	// added by yangyu, 2018.8.9
-	if newUnits == nil || len(newUnits) == 0 || newUnits[0].IsEmpty() {
-		log.Info("No unit need to be packaged for now.", "unit", newUnits[0])
+	if newUnit == nil || newUnit.IsEmpty() {
+		log.Info("No unit need to be packaged for now.", "unit", newUnit)
 		return nil
 	}
 
-	pendingUnit := &newUnits[0]
-	// dag.setUnitHeader(pendingUnit)
+	newUnit.UnitHeader.Time = when.Unix()
+	newUnit.UnitHeader.ParentsHash[0] = dag.HeadUnitHash()
+	newUnit.UnitHeader.Number.Index = dag.HeadUnitNum() + 1
+	newUnit.UnitHeader.GroupPubKey = groupPubKey
+	newUnit.Hash()
 
-	pendingUnit.UnitHeader.Creationdate = when.Unix()
-	currentHash := dag.HeadUnitHash() //dag.GetHeadUnitHash()
-	pendingUnit.UnitHeader.ParentsHash[0] = currentHash
-	header, err := dag.GetHeaderByHash(currentHash)
-	if header == nil {
-		index, err := dag.GetIrreversibleUnit(gasToken)
-		if err != nil {
-			// todo
-			log.Error("GetCurrent header failed ", "error", err)
-		}
-		pendingUnit.UnitHeader.Number.Index = index.Index + 1
-	} else {
-		pendingUnit.UnitHeader.Number.Index = header.Number.Index + 1
-	}
-	pendingUnit.UnitHeader.GroupPubKey = groupPubKey
-	pendingUnit.Hash()
-
-	sign_unit, err1 := dagcommon.GetUnitWithSig(pendingUnit, ks, producer)
+	sign_unit, err1 := dagcommon.GetUnitWithSig(newUnit, ks, producer)
 	if err1 != nil {
-		log.Debug(fmt.Sprintf("GetUnitWithSig error: %v", err))
+		log.Debugf("GetUnitWithSig error: %v", err)
 		return nil
 	}
 
 	sign_unit.UnitSize = sign_unit.Size()
+	log.Debugf("Generate new unit index:[%d],hash:[%s],size:%s, parent unit[%s], spent time: %s",
+		sign_unit.NumberU64(), sign_unit.Hash().String(), sign_unit.UnitSize.String(),
+		newUnit.UnitHeader.ParentsHash[0].String(), time.Since(t0).String())
 
-	//go log.Debug("Dag", "GenerateUnit unit:", *sign_unit)
+	//TODO add PostChainEvents
+	go func() {
+		var (
+			events = make([]interface{}, 0, 1)
+		)
+		events = append(events, modules.ChainHeadEvent{newUnit})
+		dag.PostChainEvents(events)
+	}()
 
-	dag.PushUnit(sign_unit, txpool)
+	if !dag.PushUnit(sign_unit, txpool) {
+		return nil
+	}
+
 	return sign_unit
 }
 
@@ -155,37 +112,36 @@ func (dag *Dag) GenerateUnit(when time.Time, producer common.Address, groupPubKe
  * @return true if we switched forks as a result of this push.
  */
 func (dag *Dag) PushUnit(newUnit *modules.Unit, txpool txspool.ITxPool) bool {
-	// 1. 如果当前初生产的验证单元不在最长链条上，那么就切换到最长链分叉上。
+	t0 := time.Now()
+	// 1. 如果当前初生产的unit不在最长链条上，那么就切换到最长链分叉上。
 
 	// 2. 更新状态
-	go dag.ApplyUnit(newUnit)
+	if !dag.ApplyUnit(newUnit) {
+		return false
+	}
 
-	// 3. 将验证单元添加到本地DB
-	//err := dag.SaveUnit(newUnit, false)
-	//if err != nil {
-	//	log.Debug("unit_production", "PushUnit err:", err)
-	//	return false
-	//}
-	//dag.SaveUnit(newUnit, txpool, false)
 	dag.Memdag.AddUnit(newUnit, txpool)
+	log.Debugf("save newest unit spent time: %s, index: %d , hash:%s", time.Since(t0).String(), newUnit.NumberU64(), newUnit.UnitHash.String())
 	return true
 }
 
 // ApplyUnit, 运用下一个 unit 更新整个区块链状态
-func (dag *Dag) ApplyUnit(nextUnit *modules.Unit) {
+func (dag *Dag) ApplyUnit(nextUnit *modules.Unit) bool {
+	defer func(start time.Time) {
+		log.Debugf("ApplyUnit cost time: %v", time.Since(start))
+	}(time.Now())
+
+	dag.applyLock.Lock()
+	defer dag.applyLock.Unlock()
+
 	// 1. 下一个 unit 和本地 unit 连续性的判断
-	parentHash := nextUnit.ParentHash()[0]
-	headUnitHash, _, _ := dag.propRep.GetNewestUnit(nextUnit.Number().AssetID)
-	if parentHash != headUnitHash {
-		// todo 出现分叉, 调用本方法之前未处理分叉
-		log.Debugf("unit(%v) on the forked chain: parentHash(%v) not equal headUnitHash(%v)",
-			nextUnit.UnitHash.TerminalString(), parentHash.TerminalString(), headUnitHash.TerminalString())
-		return
+	if !dag.validateUnitHeader(nextUnit) {
+		return false
 	}
 
 	// 2. 验证 unit 的 mediator 调度
 	if !dag.validateMediatorSchedule(nextUnit) {
-		return
+		return false
 	}
 
 	// todo 5. 运用Unit中的交易
@@ -208,4 +164,6 @@ func (dag *Dag) ApplyUnit(nextUnit *modules.Unit) {
 
 	// 8. 洗牌
 	dag.updateMediatorSchedule()
+
+	return true
 }

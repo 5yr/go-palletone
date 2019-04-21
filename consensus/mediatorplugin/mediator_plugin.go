@@ -11,6 +11,7 @@
    You should have received a copy of the GNU General Public License
    along with go-palletone.  If not, see <http://www.gnu.org/licenses/>.
 */
+
 /*
  * @author PalletOne core developer Albert·Gou <dev@pallet.one>
  * @date 2018
@@ -28,7 +29,6 @@ import (
 	"github.com/palletone/go-palletone/common/event"
 	"github.com/palletone/go-palletone/common/log"
 	"github.com/palletone/go-palletone/core"
-	"github.com/palletone/go-palletone/dag/modules"
 )
 
 var (
@@ -61,7 +61,7 @@ func (mp *MediatorPlugin) scheduleProductionLoop() {
 		timeToNextSecond += time.Second
 	}
 
-	// 2. 安排验证单元生产循环
+	// 2. 安排unit生产循环
 	// Start to production unit for expiration
 	timeout := time.NewTimer(timeToNextSecond)
 	defer timeout.Stop()
@@ -70,37 +70,38 @@ func (mp *MediatorPlugin) scheduleProductionLoop() {
 	select {
 	case <-mp.quit:
 		return
+	case <-mp.stopProduce:
+		return
 	case <-timeout.C:
 		go mp.unitProductionLoop()
 	}
 }
 
-//验证单元生产状态类型
+// unit生产的状态类型
 type ProductionCondition uint8
 
-//验证单元生产状态枚举
+// unit生产的状态枚举
 const (
-	Produced ProductionCondition = iota // 正常生产验证单元
+	Produced ProductionCondition = iota // 正常生产unit
 	NotSynced
 	NotMyTurn
 	NotTimeYet
 	//NoPrivateKey
 	LowParticipation
-	//Lag
+	Lag
 	Consecutive
 	ExceptionProducing
-	UnknownCondition
 )
 
 func (mp *MediatorPlugin) unitProductionLoop() ProductionCondition {
-	// 1. 尝试生产验证单元
+	// 1. 尝试生产unit
 	result, detail := mp.maybeProduceUnit()
 
 	// 2. 打印尝试结果
 	switch result {
 	case Produced:
-		log.Info("Generated unit " + detail["Hash"] + " #" + detail["Num"] + " Parent[" + detail["ParentHash"] +
-			"] @" + detail["Timestamp"] + " signed by " + detail["Mediator"])
+		log.Info("Generated unit(" + detail["Hash"] + ") #" + detail["Num"] + " parent(" + detail["ParentHash"] +
+			") @" + detail["Timestamp"] + " signed by " + detail["Mediator"])
 	case NotSynced:
 		log.Info("Not producing unit because production is disabled until we receive a recent unit." +
 			" Disable this check with --staleProduce option.")
@@ -110,9 +111,9 @@ func (mp *MediatorPlugin) unitProductionLoop() ProductionCondition {
 	case NotMyTurn:
 		log.Debug("Not producing unit because current scheduled mediator is " +
 			detail["ScheduledMediator"])
-	//case Lag:
-	//	log.Info("Not producing unit because node didn't wake up within 500ms of the slot time." +
-	//		" Scheduled Time is: " + detail["ScheduledTime"] + ", but now is " + detail["Now"])
+	case Lag:
+		log.Info("Not producing unit because node didn't wake up within 2500ms of the slot time." +
+			" Scheduled Time is: " + detail["ScheduledTime"] + ", but now is " + detail["Now"])
 	//case NoPrivateKey:
 	//	log.Info("Not producing unit because I don't have the private key for " +
 	//		detail["ScheduledKey"])
@@ -125,9 +126,9 @@ func (mp *MediatorPlugin) unitProductionLoop() ProductionCondition {
 		log.Infof("Not producing unit because node appears to be on a minority fork with only %v "+
 			"mediator participation.", detail["ParticipationRate"])
 	case ExceptionProducing:
-		log.Info("Exception producing unit")
-	case UnknownCondition:
-		log.Info("Unknown condition!")
+		log.Infof("Exception producing unit: %v", detail["Msg"])
+	default:
+		log.Infof("Unknown condition while producing unit!")
 	}
 
 	// 3. 继续循环生产计划
@@ -137,10 +138,6 @@ func (mp *MediatorPlugin) unitProductionLoop() ProductionCondition {
 }
 
 func (mp *MediatorPlugin) maybeProduceUnit() (ProductionCondition, map[string]string) {
-	defer func(start time.Time) {
-		log.Debug("maybeProduceUnit unit elapsed", "elapsed", time.Since(start))
-	}(time.Now())
-
 	detail := make(map[string]string)
 	dag := mp.dag
 
@@ -167,20 +164,21 @@ func (mp *MediatorPlugin) maybeProduceUnit() (ProductionCondition, map[string]st
 		return NotTimeYet, detail
 	}
 
-	// this Conditional judgment should fail, because now <= HeadUnitTime
+	// this conditional judgment should fail, because now <= HeadUnitTime
 	// should have resulted in slot == 0.
 	//
-	// if this assert triggers, there is a serious bug in GetSlotAtTime()
-	// which would result in allowing a later block to have a timestamp
-	// less than or equal to the previous Unit
+	// if this assert triggers, there is a serious bug in dag.GetSlotAtTime()
+	// which would result in allowing a later unit to have a timestamp
+	// less than or equal to the previous unit
 	if !(now.Unix() > dag.HeadUnitTime()) {
-		panic("The later Unit have a timestamp less than or equal to the previous!")
+		detail["Msg"] = "The property database is being updated because the new unit is received synchronously."
+		return ExceptionProducing, detail
 	}
 
 	scheduledMediator := dag.GetScheduledMediator(slot)
 	if scheduledMediator.Equal(common.Address{}) {
-		log.Error("The current shuffled mediators is nil!")
-		return UnknownCondition, detail
+		detail["Msg"] = "The current shuffled mediators is nil!"
+		return ExceptionProducing, detail
 	}
 
 	// we must control the Mediator scheduled to produce the next Unit.
@@ -199,9 +197,14 @@ func (mp *MediatorPlugin) maybeProduceUnit() (ProductionCondition, map[string]st
 	//	return NoPrivateKey, detail
 	//}
 
-	if !mp.consecutiveProduceEnabled && dag.IsConsecutiveMediator(scheduledMediator) {
-		detail["Mediator"] = scheduledMediator.Str()
-		return Consecutive, detail
+	if dag.IsConsecutiveMediator(scheduledMediator) {
+		if mp.consecutiveProduceEnabled {
+			// 连续产块的特权只能使用一次
+			mp.consecutiveProduceEnabled = false
+		} else {
+			detail["Mediator"] = scheduledMediator.Str()
+			return Consecutive, detail
+		}
 	}
 
 	pRate := dag.MediatorParticipationRate()
@@ -210,24 +213,31 @@ func (mp *MediatorPlugin) maybeProduceUnit() (ProductionCondition, map[string]st
 		return LowParticipation, detail
 	}
 
+	// todo 由于当前代码更新数据库没有加锁，可能如下情况：
+	// 生产单元的协程满足了前面的判断，此时新收到一个unit正在更新数据库，后面的判断有不能通过
 	scheduledTime := dag.GetSlotTime(slot)
-	//diff := scheduledTime.Sub(now)
-	//if diff > 500*time.Millisecond || diff < -500*time.Millisecond {
-	//	detail["ScheduledTime"] = scheduledTime.Format("2006-01-02 15:04:05")
-	//	detail["Now"] = now.Format("2006-01-02 15:04:05")
-	//	return Lag, detail
-	//}
+	diff := scheduledTime.Sub(now)
+	if diff > 2500*time.Millisecond || diff < -2500*time.Millisecond {
+		detail["ScheduledTime"] = scheduledTime.Format("2006-01-02 15:04:05")
+		detail["Now"] = now.Format("2006-01-02 15:04:05")
+		return Lag, detail
+	}
 
-	// 2. 生产验证单元
+	// 2. 生产单元
 	//execute contract
 	// todo 待优化
 	if err := mp.ptn.ContractProcessor().AddContractLoop(mp.ptn.TxPool(), scheduledMediator, ks); err != nil {
-		log.Error("MaybeProduceUnit", "RunContractLoop err:", err.Error())
+		log.Debug("MaybeProduceUnit", "RunContractLoop err:", err.Error())
 	}
 
-	groupPubKey := mp.LocalMediatorPubKey(scheduledMediator)
+	var groupPubKey []byte = nil
+	if mp.groupSigningEnabled {
+		groupPubKey = mp.LocalMediatorPubKey(scheduledMediator)
+	}
+
 	newUnit := dag.GenerateUnit(scheduledTime, scheduledMediator, groupPubKey, ks, mp.ptn.TxPool())
 	if newUnit == nil || newUnit.IsEmpty() {
+		detail["Msg"] = "The newly produced unit is empty!"
 		return ExceptionProducing, detail
 	}
 
@@ -240,27 +250,27 @@ func (mp *MediatorPlugin) maybeProduceUnit() (ProductionCondition, map[string]st
 	detail["ParentHash"] = newUnit.ParentHash()[0].TerminalString()
 
 	// 3. 对 unit 进行群签名和广播
-	go mp.broadcastAndGroupSignUnit(scheduledMediator, newUnit)
+	if mp.groupSigningEnabled {
+		go mp.groupSignUnit(scheduledMediator, unitHash)
+	}
+
+	// 4. 异步向区块链网络广播新unit
+	go mp.newProducedUnitFeed.Send(NewProducedUnitEvent{Unit: newUnit})
 
 	return Produced, detail
 }
 
-func (mp *MediatorPlugin) broadcastAndGroupSignUnit(localMed common.Address, newUnit *modules.Unit) {
-	mp.recoverBufUnitLock.Lock()
-	defer mp.recoverBufUnitLock.Unlock()
-
+func (mp *MediatorPlugin) groupSignUnit(localMed common.Address, unitHash common.Hash) {
 	// 1. 初始化签名unit相关的签名分片的buf
+	mp.recoverBufLock.Lock()
 	aSize := mp.dag.ActiveMediatorsCount()
 	if _, ok := mp.toTBLSRecoverBuf[localMed]; !ok {
 		mp.toTBLSRecoverBuf[localMed] = make(map[common.Hash]*sigShareSet)
 	}
-	unitHash := newUnit.UnitHash
 	mp.toTBLSRecoverBuf[localMed][unitHash] = newSigShareSet(aSize)
+	mp.recoverBufLock.Unlock()
 
-	// 2. 异步向区块链网络广播验证单元
-	go mp.newProducedUnitFeed.Send(NewProducedUnitEvent{Unit: newUnit})
-
-	// 3. 过了 unit 确认时间后，及时删除群签名分片的相关数据，防止内存溢出
+	// 2. 过了 unit 确认时间后，及时删除群签名分片的相关数据，防止内存溢出
 	go func() {
 		expiration := mp.dag.UnitIrreversibleTime()
 		deleteBuf := time.NewTimer(expiration)
@@ -269,15 +279,13 @@ func (mp *MediatorPlugin) broadcastAndGroupSignUnit(localMed common.Address, new
 		case <-mp.quit:
 			return
 		case <-deleteBuf.C:
-			func(){
-				mp.recoverBufUnitLock.Lock()
-				defer mp.recoverBufUnitLock.Unlock()
-				if _, ok := mp.toTBLSRecoverBuf[localMed][unitHash]; ok {
-					log.Debugf("the unit(%v) has expired confirmation time, "+"no longer need the mediator(%v) "+
-						"to recover group-sign", unitHash.TerminalString(), localMed.Str())
-					delete(mp.toTBLSRecoverBuf[localMed], unitHash)
-				}
-			}()
+			mp.recoverBufLock.Lock()
+			if _, ok := mp.toTBLSRecoverBuf[localMed][unitHash]; ok {
+				log.Debugf("the unit(%v) has expired confirmation time, no longer need the mediator(%v) "+
+					"to recover group-sign", unitHash.TerminalString(), localMed.Str())
+				delete(mp.toTBLSRecoverBuf[localMed], unitHash)
+			}
+			mp.recoverBufLock.Unlock()
 		}
 	}()
 }

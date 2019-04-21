@@ -23,12 +23,20 @@ import (
 	"sync"
 	"context"
 	"github.com/palletone/go-palletone/common"
+	"github.com/palletone/go-palletone/common/util"
 )
 
 //subUsers return the selected amount of sub-users determined from the mathematics protocol.
 //expectedNum 期望数量
 //weight 设置固定数值,即返回概率值*weight,返回值落在0  --   expectedNum/Total*weight之间的数值
-func Selected(expectedNum int, weight, total uint64, vrf []byte) int {
+func Selected(expectedNum uint, weight, total uint64, vrf []byte) int {
+	if expectedNum < 3 {
+		return 1 //todo test, is danger
+	}
+
+	hh := util.RlpHash(vrf)
+	h32 := hh[:common.HashLength]
+
 	//Total := 100
 	binomial := NewBinomial(int64(weight), int64(expectedNum), int64(total)) //weight=TokenPerUser; TotalTokenAmount = UserAmount * TokenPerUser
 	//binomial := NewApproxBinomial(int64(expectedNum), weight)
@@ -37,7 +45,9 @@ func Selected(expectedNum int, weight, total uint64, vrf []byte) int {
 	//	P: float64(expectedNum) / float64(TotalTokenAmount()),
 	//}
 	// hash / 2^hashlen ∉ [ ∑0,j B(k;w,p), ∑0,j+1 B(k;w,p))
-	hashBig := new(big.Int).SetBytes(vrf)
+
+	//	hashBig := new(big.Int).SetBytes(vrf)
+	hashBig := new(big.Int).SetBytes(h32)
 	maxHash := new(big.Int).Exp(big.NewInt(2), big.NewInt(common.HashLength*8), nil)
 	hash := new(big.Rat).SetFrac(hashBig, maxHash)
 	var lower, upper *big.Rat

@@ -5411,13 +5411,6 @@ var methods = function () {
         inputFormatter: [null]
     });*/
 
-    var createMediatorVote = new Method({
-        name: 'createMediatorVote',
-        call: 'ptn_createMediatorVote',
-        params: 2,
-    });
-
-    
    /* var signRawTransaction = new Method({
         name: 'signRawTransaction',
         call: 'ptn_signRawTransaction',
@@ -5614,7 +5607,6 @@ var methods = function () {
         //walletSendTransaction,
         //cmdCreateTransaction,
         //createRawTransaction,
-        createMediatorVote,
         //signRawTransaction,
         //sendRawTransaction,
         //signTransaction,
@@ -5829,7 +5821,7 @@ var methods = function () {
     });
 
     var ecRecover = new Method({
-        name: 'ecRecover',
+    name: 'ecRecover',
 		call: 'personal_ecRecover',
 		params: 2
     });
@@ -5866,12 +5858,12 @@ var methods = function () {
 };
 
 var properties = function () {
-    return [
+    /*return [
         new Property({
             name: 'listAccounts',
             getter: 'personal_listAccounts'
         })
-    ];
+    ];*/
 };
 
 

@@ -26,7 +26,6 @@ const (
 	DefaultHTTPPort = 8545        // Default TCP port for the HTTP RPC server
 	DefaultWSHost   = "localhost" // Default host interface for the websocket RPC server
 	DefaultWSPort   = 8546        // Default TCP port for the websocket RPC server
-	DefaultToken    = "PTN"
 )
 
 // DefaultConfig contains reasonable default settings.
@@ -34,12 +33,11 @@ var DefaultConfig = Config{
 	DataDir:          DefaultDataDir(),
 	HTTPHost:         DefaultHTTPHost,
 	HTTPPort:         DefaultHTTPPort,
-	HTTPModules:      []string{"net", "web3", "wallet", "dag"},
+	HTTPModules:      []string{"net", "web3", "wallet", "dag", "personal", "mediator"},
 	HTTPVirtualHosts: []string{"localhost"},
 	WSHost:           DefaultWSHost,
 	WSPort:           DefaultWSPort,
-	WSModules:        []string{"net", "web3", "dag"},
-	GasToken:         DefaultToken,
+	WSModules:        []string{"net", "web3", "dag", "mediator"},
 }
 
 // DefaultDataDir is the default data directory to use for the databases and other

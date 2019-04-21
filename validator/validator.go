@@ -21,10 +21,12 @@
 package validator
 
 import (
-	"github.com/palletone/go-palletone/common/log"
+	"sync"
 
+	"github.com/palletone/go-palletone/common/log"
 	"github.com/palletone/go-palletone/dag/dagconfig"
 	"github.com/palletone/go-palletone/dag/modules"
+	"time"
 )
 
 type Validate struct {
@@ -39,13 +41,39 @@ func NewValidate(dagdb IDagQuery, utxoRep IUtxoQuery, statedb IStateQuery) *Vali
 	return &Validate{dagquery: dagdb, utxoquery: utxoRep, statequery: statedb}
 }
 
+type newUtxoQuery struct {
+	oldUtxoQuery IUtxoQuery
+	unitUtxo     *sync.Map
+}
+
+func (q *newUtxoQuery) GetUtxoEntry(outpoint *modules.OutPoint) (*modules.Utxo, error) {
+	utxo, ok := q.unitUtxo.Load(*outpoint)
+	if ok {
+		return utxo.(*modules.Utxo), nil
+	}
+	return q.oldUtxoQuery.GetUtxoEntry(outpoint)
+}
+func (validate *Validate) setUtxoQuery(q IUtxoQuery) {
+	validate.utxoquery = q
+}
+
 //逐条验证每一个Tx，并返回总手续费
-func (validate *Validate) validateTransactions(txs *modules.Transactions) ValidationCode {
+func (validate *Validate) validateTransactions(txs modules.Transactions, unitTime int64) ValidationCode {
 	fee := uint64(0)
 	needCheckCoinbase := false
+	oldUtxoQuery := validate.utxoquery
+
+	unitUtxo := new(sync.Map)
+	newUtxoQuery := &newUtxoQuery{oldUtxoQuery: oldUtxoQuery, unitUtxo: unitUtxo}
+	validate.utxoquery = newUtxoQuery
+	defer validate.setUtxoQuery(oldUtxoQuery)
+
 	var coinbase *modules.Transaction
-	for txIndex, tx := range *txs {
+	for txIndex, tx := range txs {
 		txHash := tx.Hash()
+		if validate.checkTxIsExist(tx) {
+			return TxValidationCode_DUPLICATE_TXID
+		}
 		if txIndex == 0 && tx.TxMessages[0].Payload.(*modules.PaymentPayload).IsCoinbase() {
 			needCheckCoinbase = true
 			coinbase = tx
@@ -53,14 +81,20 @@ func (validate *Validate) validateTransactions(txs *modules.Transactions) Valida
 			//每个单元的第一条交易比较特殊，是Coinbase交易，其包含增发和收集的手续费
 
 		}
-		txCode := validate.validateTx(tx, txIndex == 0)
+		txCode, txFee := validate.validateTx(tx, txIndex == 0, unitTime)
 		if txCode != TxValidationCode_VALID {
 			log.Debug("ValidateTx", "txhash", txHash, "error validate code", txCode)
 
 			return txCode
 		}
-		txFee, _ := tx.GetTxFee(validate.utxoquery.GetUtxoEntry)
+		//txFee, _ := tx.GetTxFee(validate.utxoquery.GetUtxoEntry, unitTime)
 		fee += txFee.Amount
+
+		for outPoint, utxo := range tx.GetNewUtxos() {
+			unitUtxo.Store(outPoint, utxo)
+		}
+		//newUtxoQuery.unitUtxo = unitUtxo
+		//validate.utxoquery = newUtxoQuery
 	}
 	//验证第一条交易
 	if needCheckCoinbase {
@@ -68,9 +102,13 @@ func (validate *Validate) validateTransactions(txs *modules.Transactions) Valida
 		reward := ComputeRewards()
 		//TODO PTN增发的情况
 
-		mediatorIncome := coinbase.TxMessages[0].Payload.(*modules.PaymentPayload).Outputs[0].Value
-		if mediatorIncome != fee+reward {
-			log.Warnf("Unit has an incorrect coinbase, expect income=%d,actual=%d", fee+reward, mediatorIncome)
+		allIncome := uint64(0)
+		outputs := coinbase.TxMessages[0].Payload.(*modules.PaymentPayload).Outputs
+		for _, output := range outputs {
+			allIncome += output.Value
+		}
+		if allIncome != fee+reward {
+			log.Warnf("Unit has an incorrect coinbase, expect income=%d,actual=%d", fee+reward, allIncome)
 			return TxValidationCode_INVALID_FEE
 		}
 	}
@@ -82,82 +120,19 @@ func (validate *Validate) validateTransactions(txs *modules.Transactions) Valida
 check all transactions in one unit
 return all transactions' fee
 */
-func (validate *Validate) ValidateTransactions(txs *modules.Transactions) error {
-	code := validate.validateTransactions(txs)
-	return NewValidateError(code)
-	//if txs == nil || txs.Len() < 1 {
-	//	if !dagconfig.DefaultConfig.IsRewardCoin {
-	//		return nil
-	//	}
-	//	return fmt.Errorf("Transactions should not be empty.")
-	//}
-	//
-	//// todo zxl overflow
-	//txFlags := map[common.Hash]ValidationCode{}
-	//isSuccess := bool(true)
-	//// all transactions' new worldState
-	////worldState := map[string]map[string]interface{}{}
-	//
-	//for txIndex, tx := range *txs {
-	//	txHash := tx.Hash()
-	//	// validate transaction id duplication
-	//	if _, ok := txFlags[txHash]; ok == true {
-	//		isSuccess = false
-	//		log.Info("ValidateTx", "txhash", txHash, "error validate code", TxValidationCode_DUPLICATE_TXID)
-	//		txFlags[txHash] = TxValidationCode_DUPLICATE_TXID
-	//		continue
-	//	}
-	//	// validate common property
-	//	//The first Tx(txIdx==0) is a coinbase tx.
-	//
-	//	txCode := validate.validateTx(tx, txIndex == 0)
-	//	if txCode != TxValidationCode_VALID {
-	//		log.Debug("ValidateTx", "txhash", txHash, "error validate code", txCode)
-	//		isSuccess = false
-	//		txFlags[txHash] = txCode
-	//		continue
-	//	}
-	//	// validate total fee
-	//	if isGenesis == false && txIndex != 0 {
-	//		txFee, err := tx.GetTxFee(validate.utxoquery.GetUtxoEntry)
-	//		if err != nil {
-	//			log.Info("ValidateTx", "txhash", txHash, "error validate code", TxValidationCode_INVALID_FEE)
-	//			return err
-	//		}
-	//		fee += txFee.Amount
-	//	}
-	//	txFlags[txHash] = TxValidationCode_VALID
-	//}
-	//
-	//// check coinbase fee and income
-	//if !isGenesis && isSuccess {
-	//	if len((*txs)[0].TxMessages) != 1 {
-	//		return fmt.Errorf("Unit coinbase length is error.")
-	//	}
-	//
-	//	coinIn, ok := (*txs)[0].TxMessages[0].Payload.(*modules.PaymentPayload)
-	//	if !ok {
-	//		return fmt.Errorf("Coinbase payload type error.")
-	//	}
-	//	if len(coinIn.Outputs) != 1 {
-	//		return fmt.Errorf("Coinbase outputs error0.")
-	//	}
-	//	income := uint64(fee) + ComputeRewards()
-	//	if coinIn.Outputs[0].Value < income {
-	//		return fmt.Errorf("Coinbase outputs error: 1.%d", income)
-	//	}
-	//}
-	//return nil
-}
+//func (validate *Validate) ValidateTransactions(txs modules.Transactions) error {
+//	code := validate.validateTransactions(txs)
+//	return NewValidateError(code)
+//}
 func ComputeRewards() uint64 {
 	var rewards uint64
-	if dagconfig.DefaultConfig.IsRewardCoin {
+	if dagconfig.DagConfig.IsRewardCoin {
 		rewards = uint64(modules.DAO)
 	}
 	return rewards
 }
 func (validate *Validate) ValidateTx(tx *modules.Transaction, isCoinbase bool) error {
-	code := validate.validateTx(tx, isCoinbase)
+	code, _ := validate.validateTx(tx, isCoinbase, time.Now().Unix())
 	if code == TxValidationCode_VALID {
 		log.Debugf("Tx[%s] validate pass!", tx.Hash().String())
 		return nil
@@ -216,7 +191,7 @@ func (validate *Validate) checkTxIsExist(tx *modules.Transaction) bool {
 			log.Warnf("Validate DagQuery doesn't set, cannot check tx[%s] is exist or not", txHash.String())
 			return false
 		}
-		if tx, _, err := validate.dagquery.GetTransactionByHash(txHash); err == nil && tx != nil {
+		if validate.dagquery.IsTransactionExist(txHash) {
 			log.Debug("checkTxIsExist transactions exist in dag", "txHash", txHash.String())
 			return true
 		}

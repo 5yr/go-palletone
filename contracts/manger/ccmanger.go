@@ -38,6 +38,7 @@ import (
 	"github.com/palletone/go-palletone/core/vmContractPub/protos/peer"
 	pb "github.com/palletone/go-palletone/core/vmContractPub/protos/peer"
 	"github.com/palletone/go-palletone/core/vmContractPub/util"
+	"github.com/palletone/go-palletone/common/log"
 )
 
 func marshalOrPanic(pb proto.Message) []byte {
@@ -146,7 +147,7 @@ func peerCreateChain(cid string) error {
 
 var grpcServer *grpc.Server
 
-func peerServerInit() error {
+func peerServerInit(jury core.IAdapterJury) error {
 	var opts []grpc.ServerOption
 
 	grpcServer = grpc.NewServer(opts...)
@@ -154,6 +155,8 @@ func peerServerInit() error {
 	if peerAddress == "" {
 		peerAddress = "0.0.0.0:21726"
 	}
+	//TODO peer
+	log.Infof("peerServerInit listen tcp == %s",peerAddress)
 	lis, err := net.Listen("tcp", peerAddress)
 	if err != nil {
 		return err
@@ -166,7 +169,7 @@ func peerServerInit() error {
 	if err != nil {
 		return err
 	}
-	pb.RegisterChaincodeSupportServer(grpcServer, core.NewChaincodeSupport(peerAddress, false, ccStartupTimeout, ca))
+	pb.RegisterChaincodeSupportServer(grpcServer, core.NewChaincodeSupport(peerAddress, false, ccStartupTimeout, ca, jury))
 	go grpcServer.Serve(lis)
 
 	return nil

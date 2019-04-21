@@ -20,6 +20,7 @@ dumcpconfig=`./gptn dumpconfig`
 echo $dumpconfig
 
 if [ $1 -ne 1 ] ;then
+
 newipcpath="IPCPath=\"gptn$1.ipc\""
 sed -i '/^IPCPath/c'$newipcpath'' ptn-config.toml
 
@@ -32,38 +33,47 @@ sed -i '/^WSPort/c'$newWSPort'' ptn-config.toml
 newPort="Port=$[$Port+$1]"
 sed -i '/^Port/c'$newPort'' ptn-config.toml
 
-
 newListenAddr="ListenAddr=\":$[$ListenAddr+$1]\""
 sed -i '/^ListenAddr/c'$newListenAddr'' ptn-config.toml
 
 newBtcHost="BtcHost=\"localhost:$[$BtcHost+$1]\""
 sed -i '/^BtcHost/c'$newBtcHost'' ptn-config.toml
 
-
 newContractAddress="ContractAddress=\"127.0.0.1:$[$ContractAddress+$1]\""
 sed -i '/^ContractAddress/c'$newContractAddress'' ptn-config.toml
+
+
 else
+
+
 dumcpjson=`./gptn dumpjson`
 echo $dumpjson
 
-newEnableStaleProduction="EnableStaleProduction=true"
-sed -i '/^EnableStaleProduction/c'$newEnableStaleProduction'' ptn-config.toml
-
-newEnableConsecutiveProduction="EnableConsecutiveProduction=true"
-sed -i '/^EnableConsecutiveProduction/c'$newEnableConsecutiveProduction'' ptn-config.toml
 
 fi
 
 
+newEnableProducing="EnableProducing=true"
+sed -i '/^EnableProducing/c'$newEnableProducing'' ptn-config.toml
+
+newEnableStaleProduction="EnableStaleProduction=false"
+sed -i '/^EnableStaleProduction/c'$newEnableStaleProduction'' ptn-config.toml
+
+newEnableConsecutiveProduction="EnableConsecutiveProduction=false"
+sed -i '/^EnableConsecutiveProduction/c'$newEnableConsecutiveProduction'' ptn-config.toml
+
 newRequiredParticipation="RequiredParticipation=0"
 sed -i '/^RequiredParticipation/c'$newRequiredParticipation'' ptn-config.toml
+
+newEnableGroupSigning="EnableGroupSigning=false"
+sed -i '/^EnableGroupSigning/c'$newEnableGroupSigning'' ptn-config.toml
 
 
 createaccount=`./createaccount.sh`
 tempinfo=`echo $createaccount | sed -n '$p'| awk '{print $NF}'`
-accountlength=35
-accounttemp=${tempinfo:0:$accountlength}
-account=`echo ${accounttemp///}`
+#accountlength=35
+#accounttemp=${tempinfo:0:$accountlength}
+account=`echo ${tempinfo///}`
 
 
 newAddress="Address=\"$account\""
@@ -154,10 +164,9 @@ function addBootstrapNodes()
         newarr=${array:0:$[$l-1]}
         newarr="$newarr]"
     fi
-    newBootstrapNodes="BootstrapNodes=$newarr"
-    #sed -i '/^StaticNodes/c'$newStaticNodes'' node$index/ptn-config.toml
-    sed -i '/^BootstrapNodes/c'$newBootstrapNodes'' node$index/ptn-config.toml
-    echo "=====addBootstrapNodes $index ok======="
+    #newBootstrapNodes="BootstrapNodes=$newarr"
+    newBootstrapNodes="StaticNodes=$newarr"
+    echo $newBootstrapNodes
 }
 
 
@@ -168,13 +177,67 @@ function ModifyBootstrapNodes()
     count=1;
     while [ $count -le $1 ] ;
     do
-	#echo $count
-        addBootstrapNodes $1 $count
+        arrBootstrapNodes=`echo "$(addBootstrapNodes $1 $count)"`
+        #sed -i '/^BootstrapNodes/c'$arrBootstrapNodes'' node$count/ptn-config.toml
+        sed -i '/^StaticNodes/c'$arrBootstrapNodes'' node$count/ptn-config.toml
+        echo "=====addBootstrapNodes $count ok======="
+
         let ++count;
         sleep 1;
     done
     find . -name "*.toml" | xargs sed -i -e "s%\[\:\:\]%127.0.0.1%g"
     return 0;
+}
+
+function MakeTestNet()
+{
+    mkdir -p node_test$1/palletone/gptn
+    cd node_test$1
+    cp ../gptn .
+    cp ../node1/palletone/leveldb palletone/. -rf
+    dumcpconfig=`./gptn dumpuserconfig`
+    echo $dumpconfig
+
+    newipcpath="IPCPath=\"gptn$1.ipc\""
+    sed -i '/^IPCPath/c'$newipcpath'' ptn-config.toml
+
+    newHTTPPort="HTTPPort=$[$HTTPPort+$1*10]"
+    sed -i '/^HTTPPort/c'$newHTTPPort'' ptn-config.toml
+
+    newWSPort="WSPort=$[$WSPort+$1*10]"
+    sed -i '/^WSPort/c'$newWSPort'' ptn-config.toml
+
+    newPort="Port=$[$Port+$1]"
+    sed -i '/^Port/c'$newPort'' ptn-config.toml
+
+    newListenAddr="ListenAddr=\":$[$ListenAddr+$1]\""
+    sed -i '/^ListenAddr/c'$newListenAddr'' ptn-config.toml
+
+    newBtcHost="BtcHost=\"localhost:$[$BtcHost+$1]\""
+    sed -i '/^BtcHost/c'$newBtcHost'' ptn-config.toml
+
+    newContractAddress="ContractAddress=\"127.0.0.1:$[$ContractAddress+$1]\""
+    sed -i '/^ContractAddress/c'$newContractAddress'' ptn-config.toml
+
+    cd ../
+    #addBootstrapNodes $1 0
+    newarrBootstrapNodes=`echo "$(addBootstrapNodes $1 $count)"`
+    #sed -i '/^BootstrapNodes/c'$newarrBootstrapNodes'' node_test$1/ptn-config.toml
+    sed -i '/^StaticNodes/c'$newarrBootstrapNodes'' node_test$1/ptn-config.toml
+
+    newInitPrivKey="InitPrivKey=\"\""
+    sed -i '/^InitPrivKey/c'$newInitPrivKey'' node_test$1/ptn-config.toml
+
+    newInitPubKey="InitPubKey=\"\""
+    sed -i '/^InitPubKey/c'$newInitPubKey'' node_test$1/ptn-config.toml
+
+    newAddress="Address=\"\""
+    sed -i '/^Address/c'$newAddress'' node_test$1/ptn-config.toml
+
+    newPassword="Password=\"\""
+    sed -i '/^Password/c'$newPassword'' node_test$1/ptn-config.toml
+
+    echo "===========node-test ok============="
 }
 
 

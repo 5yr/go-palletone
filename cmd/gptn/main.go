@@ -69,9 +69,8 @@ var (
 		utils.TxPoolRejournalFlag,
 		utils.TxPoolPriceLimitFlag,
 		utils.TxPoolPriceBumpFlag,
-		utils.TxPoolAccountSlotsFlag,
 		utils.TxPoolGlobalSlotsFlag,
-		utils.TxPoolAccountQueueFlag,
+		//utils.TxPoolAccountQueueFlag,
 		utils.TxPoolGlobalQueueFlag,
 		utils.TxPoolLifetimeFlag,
 		utils.FastSyncFlag,
@@ -115,18 +114,15 @@ var (
 		utils.ExtraDataFlag,
 		//utils.DagValue1Flag,
 		//utils.DagValue2Flag,
-		utils.LogValue1Flag,
-		utils.LogValue2Flag,
-		utils.LogValue3Flag,
-		utils.LogValue4Flag,
-		utils.LogValue5Flag,
+		utils.LogOutputPathFlag,
+		utils.LogLevelFlag,
+		utils.LogIsDebugFlag,
+		utils.LogErrPathFlag,
+		utils.LogEncodingFlag,
 		utils.LogOpenModuleFlag,
-		ConfigFileFlag,
+		ConfigFilePathFlag,
 		GenesisJsonPathFlag,
 		GenesisTimestampFlag,
-		mp.StaleProductionFlag,
-		mp.ConsecutiveProductionFlag,
-		mp.RequiredParticipationFlag,
 	}
 
 	rpcFlags = []cli.Flag{
@@ -180,11 +176,14 @@ func init() {
 		bugCommand,
 		licenseCommand,
 		dumpConfigCommand,        //转储配置文件命令
+		dumpUserCfgCommand,       //no mediator,no jury
 		dumpJsonCommand,          //create genesis.json
 		createGenesisJsonCommand, // 创建创世json文件命令
 		nodeInfoCommand,          // 获取本节点信息
 		timestampCommand,         // 获取指定时间的时间戳
 		mediatorCommand,          // mediator 管理
+		certCommand,              //证书管理
+
 	}
 	sort.Sort(cli.CommandsByName(app.Commands))
 
@@ -193,6 +192,7 @@ func init() {
 	app.Flags = append(app.Flags, rpcFlags...)
 	app.Flags = append(app.Flags, consoleFlags...)
 	app.Flags = append(app.Flags, debug.Flags...)
+	app.Flags = append(app.Flags, mp.MediatorFlags...)
 
 	// before函数在app.Run的开始会先调用，也就是gopkg.in/urfave/cli.v1/app.go Run函数的前面
 	app.Before = func(ctx *cli.Context) error {
@@ -236,7 +236,7 @@ func main() {
 // It creates a default node based on the command line arguments and runs it in
 // blocking mode, waiting for it to be shut down.
 func gptn(ctx *cli.Context) error {
-	node := makeFullNode(ctx)
+	node := makeFullNode(ctx, false)
 	startNode(ctx, node)
 	node.Wait()
 	return nil

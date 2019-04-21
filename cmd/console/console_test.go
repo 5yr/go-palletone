@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +33,7 @@ import (
 	"github.com/palletone/go-palletone/core/gen"
 	"github.com/palletone/go-palletone/core/node"
 	dag2 "github.com/palletone/go-palletone/dag"
+	"github.com/palletone/go-palletone/dag/dagconfig"
 	"github.com/palletone/go-palletone/internal/jsre"
 	"github.com/palletone/go-palletone/ptn"
 )
@@ -93,7 +95,7 @@ func DevGenesisBlock() *core.Genesis {
 	return &core.Genesis{
 		Version:                "0.6.0",
 		TokenAmount:            "1000000000",
-		TokenDecimal:           8,
+		GasToken:               "PTN",
 		ChainID:                1,
 		TokenHolder:            core.DefaultTokenHolder,
 		InitialParameters:      initParams,
@@ -130,9 +132,10 @@ func newTester(t *testing.T, confOverride func(*ptn.Config)) *tester {
 		confOverride(ptnConf)
 	}
 
-	fmt.Println("------------start open leveldb and store test genesis unit--------------")
-	db_path := "leveldb"
-	if err := os.MkdirAll(db_path, 0777); err != nil {
+	//fmt.Println("------------start open leveldb and store test genesis unit--------------")
+	dbPath := filepath.Join(workspace, "./leveldb")
+	dagconfig.DagConfig.DbPath = dbPath
+	if err := os.MkdirAll(dbPath, 0777); err != nil {
 		fmt.Println("mkdir error:", err)
 		return nil
 	}
@@ -144,7 +147,7 @@ func newTester(t *testing.T, confOverride func(*ptn.Config)) *tester {
 	}
 
 	// fmt.Println("new account success and address=", account.Address.String())
-	db, _ := stack.OpenDatabase(db_path, 0, 0)
+	db, _ := stack.OpenDatabase(dbPath, 0, 0)
 	//db, _ := ptndb.NewMemDatabase()
 	dag, _ := dag2.NewDag4GenesisInit(db)
 	err = ks.Unlock(account, password)
@@ -153,7 +156,6 @@ func newTester(t *testing.T, confOverride func(*ptn.Config)) *tester {
 		return nil
 	}
 
-	// modified by Albert·Gou
 	unit, err := gen.SetupGenesisUnit(ptnConf.Genesis, ks, account)
 	if err != nil {
 		fmt.Printf("Failed to write genesis unit: %v \n", err)

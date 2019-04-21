@@ -21,22 +21,24 @@
 package storage
 
 import (
+	"crypto/ecdsa"
 	"github.com/palletone/go-palletone/common"
+	"github.com/palletone/go-palletone/common/crypto"
 	"github.com/palletone/go-palletone/common/ptndb"
+	"github.com/palletone/go-palletone/dag/modules"
 	"github.com/stretchr/testify/assert"
 	"testing"
-	"crypto/ecdsa"
-	"github.com/palletone/go-palletone/common/crypto"
-	"github.com/palletone/go-palletone/dag/modules"
 )
+
 var hash = common.HexToHash("0xfa4329fbb03fdd5d538a9a01a9af3b6f13e31d476ef9731adbee8bc4df688144")
+
 func TestGetUnit(t *testing.T) {
 	//log.Println("dbconn is nil , renew db  start ...")
 
 	db, _ := ptndb.NewMemDatabase()
 	//l := log.NewTestLog()
 	dagdb := NewDagDb(db)
-	u, err := dagdb.GetHeader(common.HexToHash("0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347"))
+	u, err := dagdb.GetHeaderByHash(common.HexToHash("0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347"))
 	assert.Nil(t, u, "empty db, must return nil Unit")
 	assert.NotNil(t, err)
 }
@@ -75,11 +77,10 @@ func TestGetHeader(t *testing.T) {
 	//tr = tr.SetString("c35639062e40f8891cef2526b387f42e353b8f403b930106bb5aa3519e59e35f")
 	h.TxRoot = common.HexToHash("c35639062e40f8891cef2526b387f42e353b8f403b930106bb5aa3519e59e35f")
 	sig, _ := crypto.Sign(h.TxRoot[:], key)
-	au.R = sig[:32]
-	au.S = sig[32:64]
-	au.V = sig[64:]
+	au.Signature = sig
+	au.PubKey = crypto.CompressPubkey(&key.PublicKey)
 	h.Authors = au
-	h.Creationdate = 123
+	h.Time = 123
 
 	t.Logf("%#v", h)
 
@@ -88,7 +89,7 @@ func TestGetHeader(t *testing.T) {
 
 	err := dagdb.SaveHeader(h)
 	assert.Nil(t, err)
-	dbHeader, err := dagdb.GetHeader(h.Hash())
+	dbHeader, err := dagdb.GetHeaderByHash(h.Hash())
 	assert.Nil(t, err)
 	t.Logf("%#v", dbHeader)
 	assertRlpHashEqual(t, h, dbHeader)
@@ -120,14 +121,14 @@ func TestGetTransaction(t *testing.T) {
 	tx := modules.NewTransaction(
 		[]*modules.Message{msg, msg2, msg3},
 	)
-    t.Logf("%#v",tx)
+	t.Logf("%#v", tx)
 	db, _ := ptndb.NewMemDatabase()
 	dagdb := NewDagDb(db)
 
 	err := dagdb.SaveTransaction(tx)
 	assert.Nil(t, err)
-	t.Log("tx ",tx)
-	tx2, err:= dagdb.gettrasaction(tx.Hash())
+	t.Log("tx ", tx)
+	tx2, err := dagdb.GetTransactionOnly(tx.Hash())
 	assert.Nil(t, err)
 	t.Logf("%#v", tx2)
 	assertRlpHashEqual(t, tx, tx2)

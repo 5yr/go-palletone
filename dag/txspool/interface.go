@@ -47,15 +47,14 @@ type ITxPool interface {
 	SendStoredTxs(hashs []common.Hash) error
 	DiscardTxs(hashs []common.Hash) error
 	//DiscardTx(hash common.Hash) error
-
+	GetUtxoEntry(outpoint *modules.OutPoint) (*modules.Utxo, error)
 	// SubscribeTxPreEvent should return an event subscription of
 	// TxPreEvent and send events to the given channel.
 	SubscribeTxPreEvent(chan<- modules.TxPreEvent) event.Subscription
 	GetSortedTxs(hash common.Hash) ([]*modules.TxPoolTransaction, common.StorageSize)
-	GetNonce(hash common.Hash) uint64
 	Get(hash common.Hash) (*modules.TxPoolTransaction, common.Hash)
 	GetPoolTxsByAddr(addr string) ([]*modules.TxPoolTransaction, error)
-	Stats() (int, int)
+	Stats() (int, int, int)
 	Content() (map[common.Hash]*modules.Transaction, map[common.Hash]*modules.Transaction)
 	GetTxFee(tx *modules.Transaction) (*modules.AmountAsset, error)
 	OutPointIsSpend(outPoint *modules.OutPoint) (bool, error)

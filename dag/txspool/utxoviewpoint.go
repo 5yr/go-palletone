@@ -29,8 +29,11 @@ import (
 	"github.com/palletone/go-palletone/tokenengine"
 )
 
-type utxoBaseOp interface {
+type utxoBaseGetOp interface {
 	GetUtxoEntry(outpoint *modules.OutPoint) (*modules.Utxo, error)
+}
+type utxoBaseOp interface {
+	utxoBaseGetOp
 	SaveUtxoEntity(outpoint *modules.OutPoint, utxo *modules.Utxo) error
 }
 
@@ -84,7 +87,7 @@ func (view *UtxoViewpoint) SpentUtxo(db utxoBaseOp, outpoints map[modules.OutPoi
 	}
 	return nil
 }
-func (view *UtxoViewpoint) FetchUnitUtxos(db utxoBaseOp, unit *modules.Unit) error {
+func (view *UtxoViewpoint) FetchUnitUtxos(db utxoBaseGetOp, unit *modules.Unit) error {
 	transactions := unit.Transactions()
 	if len(transactions) <= 1 {
 		return nil
@@ -150,21 +153,21 @@ func (view *UtxoViewpoint) FetchUnitUtxos(db utxoBaseOp, unit *modules.Unit) err
 // 	}
 // 	return needSet, nil
 // }
-func (view *UtxoViewpoint) FetchUtxos(db utxoBaseOp, outpoints map[modules.OutPoint]struct{}) error {
+func (view *UtxoViewpoint) FetchUtxos(db utxoBaseGetOp, outpoints map[modules.OutPoint]struct{}) error {
 	if len(outpoints) == 0 {
 		return nil
 	}
-	neededSet := make(map[modules.OutPoint]struct{})
-	for outpoint := range outpoints {
-		if _, ok := view.entries[outpoint]; ok {
-			continue
-		}
-		neededSet[outpoint] = struct{}{}
-	}
-	return view.fetchUtxosMain(db, neededSet)
+	//neededSet := make(map[modules.OutPoint]struct{})
+	//for outpoint := range outpoints {
+	//	if _, ok := view.entries[outpoint]; ok {
+	//		continue
+	//	}
+	//	neededSet[outpoint] = struct{}{}
+	//}
+	return view.fetchUtxosMain(db, outpoints)
 
 }
-func (view *UtxoViewpoint) fetchUtxosMain(db utxoBaseOp, outpoints map[modules.OutPoint]struct{}) error {
+func (view *UtxoViewpoint) fetchUtxosMain(db utxoBaseGetOp, outpoints map[modules.OutPoint]struct{}) error {
 	if len(outpoints) == 0 {
 		return nil
 	}
@@ -329,41 +332,6 @@ func CheckTransactionSanity(tx *modules.Transaction) error {
 		if ok == false {
 			continue
 		}
-		//for _, txOut := range payload.Outputs {
-		//	satoshi := txOut.Value
-		//	if satoshi < 0 {
-		//		str := fmt.Sprintf("transaction output has negative "+
-		//			"value of %v", satoshi)
-		//		return errors.New(str)
-		//
-		//	}
-		//	if satoshi > MaxDao {
-		//		str := fmt.Sprintf("transaction output value of %v is "+
-		//			"higher than max allowed value of %v", satoshi,
-		//			MaxDao)
-		//		return errors.New(str)
-		//	}
-		//
-		//	// Two's complement int64 overflow guarantees that any overflow
-		//	// is detected and reported.  This is impossible for Bitcoin, but
-		//	// perhaps possible if an alt increases the total money supply.
-		//	totalSatoshi += satoshi
-		//	if totalSatoshi < 0 {
-		//		str := fmt.Sprintf("total value of all transaction "+
-		//			"outputs exceeds max allowed value of %v",
-		//			MaxDao)
-		//		return errors.New(str)
-		//	}
-		//	if totalSatoshi > MaxDao+Raised {
-		//		str := fmt.Sprintf("total value of all transaction "+
-		//			"outputs is %v which is higher than max "+
-		//			"allowed value of %v", totalSatoshi,
-		//			MaxDao)
-		//		return errors.New(str)
-		//	}
-		//	//todo find all txin amout by input hash
-		//	// if total inamout small than out value ,err
-		//}
 
 		// Check for duplicate transaction inputs.
 		existingTxOut := make(map[modules.OutPoint]struct{})
@@ -376,8 +344,5 @@ func CheckTransactionSanity(tx *modules.Transaction) error {
 			}
 		}
 	}
-	//check whether input valid need find former script and than
-	// call
-
 	return nil
 }

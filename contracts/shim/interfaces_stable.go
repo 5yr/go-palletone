@@ -21,6 +21,7 @@ package shim
 
 import (
 	"github.com/golang/protobuf/ptypes/timestamp"
+	"github.com/palletone/go-palletone/common"
 	pb "github.com/palletone/go-palletone/core/vmContractPub/protos/peer"
 	"github.com/palletone/go-palletone/dag/modules"
 )
@@ -94,6 +95,7 @@ type ChaincodeStubInterface interface {
 	// consider data modified by PutState that has not been committed.
 	// If the key does not exist in the state database, (nil, nil) is returned.
 	GetState(key string) ([]byte, error)
+	GetStateByPrefix(prefix string) ([]*modules.KeyValue, error)
 
 	// PutState puts the specified `key` and `value` into the transaction's
 	// writeset as a data-write proposal. PutState doesn't effect the ledger
@@ -108,6 +110,15 @@ type ChaincodeStubInterface interface {
 	OutChainTransaction(outChainName string, params []byte) ([]byte, error)
 	OutChainQuery(outChainName string, params []byte) ([]byte, error)
 
+	//retrun local jury's signature
+	SendJury(msgType uint32, consultContent []byte, myAnswer []byte) ([]byte, error)
+	//return all jury's signature and answer,format:[]JuryMsgSig
+	//type JuryMsgSig struct {
+	//	Signature []byte
+	//	Answer    []byte
+	//}
+	RecvJury(msgType uint32, consultContent []byte, timeout uint32) ([]byte, error)
+
 	// DelState records the specified `key` to be deleted in the writeset of
 	// the transaction proposal. The `key` and its value will be deleted from
 	// the ledger when the transaction is validated and successfully committed.
@@ -116,7 +127,7 @@ type ChaincodeStubInterface interface {
 	// GetTxTimestamp returns the timestamp when the transaction was created. This
 	// is taken from the transaction ChannelHeader, therefore it will indicate the
 	// client's timestamp and will have the same value across all endorsers.
-	GetTxTimestamp() (*timestamp.Timestamp, error)
+	GetTxTimestamp(rangeNumber uint32) (*timestamp.Timestamp, error)
 
 	// SetEvent allows the chaincode to set an event on the response to the
 	// proposal to be included as part of a transaction. The event will be
@@ -127,13 +138,15 @@ type ChaincodeStubInterface interface {
 	//获取合约的一些配置参数
 	GetSystemConfig(filed string) (value string, err error)
 	//获取支付合约的 from 地址
-	GetInvokeAddress() (addr string, err error)
+	GetInvokeAddress() (invokeAddr common.Address, err error)
 	//获取支付ptn数量
-	GetInvokeTokens() (invokeTokens *modules.InvokeTokens, err error)
+	GetInvokeTokens() (invokeTokens []*modules.InvokeTokens, err error)
 	//获取所有的世界状态
 	GetContractAllState() (states map[string]*modules.ContractStateValue, err error)
 	//获取调用合约所支付的PTN手续费
 	GetInvokeFees() (invokeFees *modules.AmountAsset, err error)
+	//获取合约地址
+	GetContractID() ([]byte, string)
 	//获得某地址的Token余额
 	//如果地址为空则表示当前合约
 	//如果token为空则表示查询所有Token余额
@@ -141,12 +154,18 @@ type ChaincodeStubInterface interface {
 	//将合约上锁定的某种Token支付出去
 	PayOutToken(addr string, invokeTokens *modules.InvokeTokens, lockTime uint32) error
 	//获取invoke参数，包括invokeAddr,tokens,fee,funcName,params
-	GetInvokeParameters() (invokeAddr string, invokeTokens *modules.InvokeTokens, invokeFees *modules.AmountAsset, funcName string, params []string, err error)
+	GetInvokeParameters() (invokeAddr common.Address, invokeTokens []*modules.InvokeTokens, invokeFees *modules.AmountAsset, funcName string, params []string, err error)
 	//定义并发行一种全新的Token
 	DefineToken(tokenType byte, define []byte, creator string) error
 	//增发一种之前已经定义好的Token
 	//如果是ERC20增发，则uniqueId为空，如果是ERC721增发，则必须指定唯一的uniqueId
 	SupplyToken(assetId []byte, uniqueId []byte, amt uint64, creator string) error
+
+	// 根据证书ID获得证书字节数据
+	GetRequesterCert() (certBytes []byte, err error)
+	// 验证证书是否合法, error返回的是不合法的原因
+	IsRequesterCertValidate() (bool, error)
+
 	// GetStateByRange returns a range iterator over a set of keys in the
 	// ledger. The iterator can be used to iterate over all keys
 	// between the startKey (inclusive) and endKey (exclusive).

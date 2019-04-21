@@ -11,6 +11,7 @@
    You should have received a copy of the GNU General Public License
    along with go-palletone.  If not, see <http://www.gnu.org/licenses/>.
 */
+
 /*
  * @author PalletOne core developers <dev@pallet.one>
  * @date 2018
@@ -24,19 +25,20 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"github.com/palletone/go-palletone/common/log"
 	"github.com/palletone/go-palletone/dag/modules"
 )
 
 var (
-	SConfig Sconfig
+	SConfig      Sconfig
+	DefaultToken = "PTN"
+	DagConfig    = DefaultConfig
 )
 
-//var DbPath string = DefaultDataDir()
-
 var DefaultConfig = Config{
-	DbPath: DefaultDataDir(),
+	DbPath: "./leveldb",
 	// txpool
-	UnitTxSize: 1024 * 1024,
+	UnitTxSize: 1024 * 1000 * 5, //5mb
 
 	// utxo
 	UtxoIndex: true,
@@ -47,24 +49,27 @@ var DefaultConfig = Config{
 	IrreversibleHeight:           1, // 单节点memdag正常缓存区块，需要将该值设置为1
 	WhetherValidateUnitSignature: false,
 	GenesisHash:                  "0xeb5f66d0289ea0af68860fd5a4d1a0b38389f598ae01008433a5ca9949fcf55c",
-	PtnAssetHex:                  modules.CoreAsset.AssetId.String(),
-	PtnAssetId:                   modules.NewPTNAsset().AssetId[:],
-	IsRewardCoin:                 false,
-	AddrTxsIndex:                 false,
-	TextFileHashIndex:            false,
+	PartitionForkUnitHeight:      0,
+	//PtnAssetHex:                  modules.CoreAsset.AssetId.String(),
+	//PtnAssetId:                   modules.NewPTNAsset().AssetId[:],
+	IsRewardCoin:      false,
+	AddrTxsIndex:      false,
+	Token721TxIndex:   true,
+	TextFileHashIndex: false,
+	GasToken:          DefaultToken,
 }
 
-func init() {
-	if DefaultConfig.PtnAssetHex != "" {
-		id, _ := modules.SetIdTypeByHex(DefaultConfig.PtnAssetHex)
-		DefaultConfig.PtnAssetId = id[:]
-		modules.PTNCOIN.SetBytes(DefaultConfig.PtnAssetId)
-	}
-}
+//func init() {
+//	if DagConfig.PtnAssetHex != "" {
+//		id, _ := modules.SetIdTypeByHex(DagConfig.PtnAssetHex)
+//		DagConfig.PtnAssetId = id[:]
+//		// modules.PTNCOIN.SetBytes(DagConfig.PtnAssetId)
+//	}
+//}
 
 // global configuration of dag modules
 type Config struct {
-	DbPath    string `toml:"-"`
+	DbPath    string
 	DbCache   int
 	DbHandles int
 
@@ -92,14 +97,21 @@ type Config struct {
 	// Validate unit signature, just for debug version
 	WhetherValidateUnitSignature bool
 	// genesis hash‘s hex
-	GenesisHash string
-	PtnAssetHex string
-	PtnAssetId  []byte
+	GenesisHash             string
+	PartitionForkUnitHeight int
 
-	IsRewardCoin bool
-	AddrTxsIndex bool
+	IsRewardCoin    bool
+	AddrTxsIndex    bool
+	Token721TxIndex bool
 
 	TextFileHashIndex bool
+
+	//当前节点选择的平台币，燃料币,必须为Asset全名
+	GasToken string
+	gasToken modules.AssetId `toml:"-"`
+
+	SyncPartitionTokens []string
+	syncPartitionTokens []modules.AssetId `toml:"-"`
 }
 
 type Sconfig struct {
@@ -132,4 +144,42 @@ func homeDir() string {
 		return usr.HomeDir
 	}
 	return ""
+}
+
+func (c *Config) GetGasToken() modules.AssetId {
+	if c.gasToken == modules.ZeroIdType16() {
+		token, _, err := modules.String2AssetId(c.GasToken)
+		if err != nil {
+			log.Warn("Cannot parse node.GasToken to a correct asset, token str:" + c.GasToken)
+			return modules.PTNCOIN
+		}
+		c.gasToken = token
+	}
+	return c.gasToken
+}
+
+//func (c *Config) GetMainToken() modules.AssetId {
+//	if c.mainToken == modules.ZeroIdType16() {
+//		token, _, err := modules.String2AssetId(c.MainToken)
+//		{
+//			if err != nil {
+//				return modules.PTNCOIN
+//			}
+//		}
+//		c.mainToken = token
+//	}
+//	return c.mainToken
+//}
+func (c *Config) GeSyncPartitionTokens() []modules.AssetId {
+	if c.syncPartitionTokens == nil {
+		c.syncPartitionTokens = []modules.AssetId{}
+		for _, tokenString := range c.SyncPartitionTokens {
+			token, _, err := modules.String2AssetId(tokenString)
+			if err != nil {
+				log.Warn("Cannot parse node.SyncPartitionTokens to a correct asset, token str:" + c.GasToken)
+				c.syncPartitionTokens = append(c.syncPartitionTokens, token)
+			}
+		}
+	}
+	return c.syncPartitionTokens
 }

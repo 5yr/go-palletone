@@ -27,6 +27,18 @@ import (
 )
 
 func juryPayToDepositContract(stub shim.ChaincodeStubInterface, args []string) peer.Response {
+	depositAmountsForJuryStr, err := stub.GetSystemConfig("DepositAmountForJury")
+	if err != nil {
+		log.Error("Stub.GetSystemConfig with DepositAmountForJury err:", "error", err)
+		return shim.Error(err.Error())
+	}
+	//转换
+	depositAmountsForJury, err := strconv.ParseUint(depositAmountsForJuryStr, 10, 64)
+	if err != nil {
+		log.Error("Strconv.ParseUint err:", "error", err)
+		return shim.Error(err.Error())
+	}
+	log.Info("Stub.GetSystemConfig with DepositAmountForJury:", "value", depositAmountsForJury)
 	//交付地址
 	invokeAddr, err := stub.GetInvokeAddress()
 	if err != nil {
@@ -34,7 +46,9 @@ func juryPayToDepositContract(stub shim.ChaincodeStubInterface, args []string) p
 		return shim.Error(err.Error())
 	}
 	//交付数量
-	invokeTokens, err := stub.GetInvokeTokens()
+	//交付数量
+	//invokeTokens, err := stub.GetInvokeTokens()
+	invokeTokens, err := isContainDepositContractAddr(stub)
 	if err != nil {
 		log.Error("Stub.GetInvokeTokens err:", "error", err)
 		return shim.Error(err.Error())
@@ -42,7 +56,7 @@ func juryPayToDepositContract(stub shim.ChaincodeStubInterface, args []string) p
 	//fmt.Printf("lalal %#v\n", invokeTokens)
 
 	//获取账户
-	balance, err := GetDepositBalance(stub,invokeAddr)
+	balance, err := GetDepositBalance(stub, invokeAddr.String())
 	if err != nil {
 		log.Error("Stub.GetDepositBalance err:", "error", err)
 		return shim.Error(err.Error())
@@ -69,7 +83,12 @@ func juryPayToDepositContract(stub shim.ChaincodeStubInterface, args []string) p
 			isJury = true
 			//TODO 再次交付保证金时，先计算当前余额的币龄奖励
 			endTime := balance.LastModifyTime * 1800
-			awards := award.GetAwardsWithCoins(balance.TotalAmount, endTime)
+			depositRate,err := stub.GetSystemConfig("DepositRate")
+			if err != nil {
+				log.Error("stub.GetSystemConfig err:","error",err)
+				return shim.Error(err.Error())
+			}
+			awards := award.GetAwardsWithCoins(balance.TotalAmount, endTime,depositRate)
 			balance.TotalAmount += awards
 
 		}
@@ -88,7 +107,7 @@ func juryPayToDepositContract(stub shim.ChaincodeStubInterface, args []string) p
 			balance.EnterTime = time.Now().UTC().Unix() / 1800
 		}
 	}
-	err = marshalAndPutStateForBalance(stub, invokeAddr, balance)
+	err = marshalAndPutStateForBalance(stub, invokeAddr.String(), balance)
 	if err != nil {
 		log.Error("MarshalAndPutStateForBalance err:", "error", err)
 		return shim.Error(err.Error())
@@ -119,13 +138,21 @@ func handleForJuryApplyCashback(stub shim.ChaincodeStubInterface, args []string)
 		return shim.Error(err.Error())
 	}
 	//判断没收请求地址是否是基金会地址
-	if strings.Compare(invokeAddr, foundationAddress) != 0 {
+	foundationAddress, err := stub.GetSystemConfig("FoundationAddress")
+	if err != nil {
+		//fmt.Println(err.Error())
+		log.Error("Stub.GetSystemConfig with FoundationAddress err:", "error", err)
+		return shim.Error(err.Error())
+	}
+	//foundationAddress = "P129MFVxaLP4N9FZxYQJ3QPJks4gCeWsF9p"
+	log.Info("Stub.GetSystemConfig with FoundationAddress:", "value", foundationAddress)
+	if strings.Compare(invokeAddr.String(), foundationAddress) != 0 {
 		log.Error("Please use foundation address.")
 		return shim.Error("Please use foundation address.")
 	}
 	//获取一下该用户下的账簿情况
 	addr := args[0]
-	balance, err :=  GetDepositBalance(stub,addr)
+	balance, err := GetDepositBalance(stub, addr)
 	if err != nil {
 		log.Error("Stub.GetDepositBalance err:", "error", err)
 		return shim.Error(err.Error())
@@ -166,7 +193,7 @@ func handleForJuryApplyCashback(stub shim.ChaincodeStubInterface, args []string)
 
 func handleJury(stub shim.ChaincodeStubInterface, cashbackAddr string, applyTime int64, balance *DepositBalance) error {
 	//获取请求列表
-	listForCashback, err :=  GetListForCashback(stub)
+	listForCashback, err := GetListForCashback(stub)
 	if err != nil {
 		log.Error("Stub.GetListForCashback err:", "error", err)
 		return err
@@ -221,6 +248,18 @@ func handleJury(stub shim.ChaincodeStubInterface, cashbackAddr string, applyTime
 
 //对Jury退保证金的处理
 func handleJuryDepositCashback(stub shim.ChaincodeStubInterface, cashbackAddr string, cashbackValue *Cashback, balance *DepositBalance) error {
+	depositAmountsForJuryStr, err := stub.GetSystemConfig("DepositAmountForJury")
+	if err != nil {
+		log.Error("Stub.GetSystemConfig with DepositAmountForJury err:", "error", err)
+		return err
+	}
+	//转换
+	depositAmountsForJury, err := strconv.ParseUint(depositAmountsForJuryStr, 10, 64)
+	if err != nil {
+		log.Error("Strconv.ParseUint err:", "error", err)
+		return err
+	}
+	log.Info("Stub.GetSystemConfig with DepositAmountForJury:", "value", depositAmountsForJury)
 	if balance.TotalAmount >= depositAmountsForJury {
 		//已在列表中
 		err := handleJuryFromList(stub, cashbackAddr, cashbackValue, balance)
@@ -241,8 +280,18 @@ func handleJuryDepositCashback(stub shim.ChaincodeStubInterface, cashbackAddr st
 
 //Jury已在列表中
 func handleJuryFromList(stub shim.ChaincodeStubInterface, cashbackAddr string, cashbackValue *Cashback, balance *DepositBalance) error {
+	depositPeriod, err := stub.GetSystemConfig("DepositPeriod")
+	if err != nil {
+		log.Error("Stub.GetSystemConfig with DepositPeriod err:", "error", err)
+		return err
+	}
+	day, err := strconv.Atoi(depositPeriod)
+	if err != nil {
+		log.Error("Strconv.Atoi err:", "error", err)
+		return err
+	}
+	log.Info("Stub.GetSystemConfig with DepositPeriod:", "value", day)
 	//退出列表
-	var err error
 	//计算余额
 	result := balance.TotalAmount - cashbackValue.CashbackTokens.Amount
 	//判断是否退出列表
@@ -252,7 +301,7 @@ func handleJuryFromList(stub shim.ChaincodeStubInterface, cashbackAddr string, c
 		//当前退出时间
 		endTime := time.Now().UTC().YearDay()
 		//判断是否已到期
-		if endTime-startTime >= depositPeriod {
+		if endTime-startTime >= day {
 			//退出全部，即删除cashback，利息计算好了
 			err = cashbackAllDeposit("Jury", stub, cashbackAddr, cashbackValue.CashbackTokens, balance)
 			if err != nil {
