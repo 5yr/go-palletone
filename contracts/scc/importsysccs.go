@@ -12,35 +12,42 @@
 	along with go-palletone.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-/*
- * Copyright IBM Corp. All Rights Reserved.
- * @author PalletOne core developers <dev@pallet.one>
- * @date 2018
- */
-
 package scc
 
 import (
-	"github.com/palletone/go-palletone/contracts/example/go/deposit"
-	"github.com/palletone/go-palletone/contracts/example/go/samplesyscc"
 	"github.com/palletone/go-palletone/contracts/syscontract"
+	"github.com/palletone/go-palletone/contracts/syscontract/blacklistcc"
+	"github.com/palletone/go-palletone/contracts/syscontract/coinbasecc"
 	"github.com/palletone/go-palletone/contracts/syscontract/debugcc"
+	"github.com/palletone/go-palletone/contracts/syscontract/deposit"
 	"github.com/palletone/go-palletone/contracts/syscontract/digitalidcc"
+	"github.com/palletone/go-palletone/contracts/syscontract/partitioncc"
 	"github.com/palletone/go-palletone/contracts/syscontract/prc20"
 	"github.com/palletone/go-palletone/contracts/syscontract/prc721"
 	"github.com/palletone/go-palletone/contracts/syscontract/sysconfigcc"
 	"github.com/palletone/go-palletone/contracts/syscontract/vote"
+	"github.com/palletone/go-palletone/contracts/example/go/samplesyscc"
+	"github.com/palletone/go-palletone/contracts/example/go/samplesyscc1"
 )
 
 var systemChaincodes = []*SystemChaincode{
 	{
-		Id:        syscontract.TestRunContractAddress.Bytes21(), //PCGTta3M4t3yXu8uRgkKvaWd2d9Vgsc4zGX
+		Id:        syscontract.TestRunContractAddress.Bytes(), //PCGTta3M4t3yXu8uRgkKvaWd2d9Vgsc4zGX
 		Enabled:   true,
 		Name:      "sample_syscc",
 		Path:      "../example/go/samplesyscc/samplesyscc",
 		Version:   "ptn001",
 		InitArgs:  [][]byte{},
 		Chaincode: &samplesyscc.SampleSysCC{},
+	},
+	{
+		Id:        syscontract.TestRunContractAddress.Bytes(), //PCGTta3M4t3yXu8uRgkKvaWd2d9Vgsc4zGX
+		Enabled:   true,
+		Name:      "sample_syscc",
+		Path:      "../example/go/samplesyscc1/samplesyscc1",
+		Version:   "ptn002",
+		InitArgs:  [][]byte{},
+		Chaincode: &samplesyscc1.SampleSysCC{},
 	},
 	//
 	//{
@@ -65,7 +72,7 @@ var systemChaincodes = []*SystemChaincode{
 	//	Chaincode: &samplesyscc2.SampleSysCC2{},
 	//},
 	{
-		Id:        syscontract.DepositContractAddress.Bytes21(), //合约ID为20字节
+		Id:        syscontract.DepositContractAddress.Bytes(), //合约ID为20字节
 		Enabled:   true,
 		Name:      "deposit_syscc",
 		Path:      "../example/go/deposit/deposit",
@@ -74,7 +81,7 @@ var systemChaincodes = []*SystemChaincode{
 		Chaincode: &deposit.DepositChaincode{},
 	},
 	{
-		Id:        syscontract.CreateTokenContractAddress.Bytes21(), //合约ID为20字节
+		Id:        syscontract.CreateTokenContractAddress.Bytes(), //合约ID为20字节
 		Enabled:   true,
 		Name:      "createToken_sycc",
 		Path:      "../syscontract/prc20/prc20",
@@ -83,7 +90,7 @@ var systemChaincodes = []*SystemChaincode{
 		Chaincode: &prc20.PRC20{},
 	},
 	{
-		Id:        syscontract.VoteTokenContractAddress.Bytes21(), //合约ID为20字节
+		Id:        syscontract.VoteTokenContractAddress.Bytes(), //合约ID为20字节
 		Enabled:   true,
 		Name:      "voteToken_sycc",
 		Path:      "../syscontract/vote/vote",
@@ -92,7 +99,7 @@ var systemChaincodes = []*SystemChaincode{
 		Chaincode: &vote.Vote{},
 	},
 	{
-		Id:        syscontract.SysConfigContractAddress.Bytes21(),
+		Id:        syscontract.SysConfigContractAddress.Bytes(),
 		Enabled:   true,
 		Name:      "sysconfig_sycc",
 		Path:      "../syscontract/sysconfigcc/sysconfigcc",
@@ -101,7 +108,7 @@ var systemChaincodes = []*SystemChaincode{
 		Chaincode: &sysconfigcc.SysConfigChainCode{},
 	},
 	{
-		Id:        syscontract.CreateToken721ContractAddress.Bytes21(), //合约ID为20字节
+		Id:        syscontract.CreateToken721ContractAddress.Bytes(), //合约ID为20字节
 		Enabled:   true,
 		Name:      "createToken721_sycc",
 		Path:      "../syscontract/prc721/prc721",
@@ -110,7 +117,7 @@ var systemChaincodes = []*SystemChaincode{
 		Chaincode: &prc721.PRC721{},
 	},
 	{
-		Id:        syscontract.DigitalIdentityContractAddress.Bytes21(),
+		Id:        syscontract.DigitalIdentityContractAddress.Bytes(),
 		Enabled:   true,
 		Name:      "digital_identity_sycc",
 		Path:      "../syscontract/digitalidcc/digitalidcc",
@@ -119,13 +126,40 @@ var systemChaincodes = []*SystemChaincode{
 		Chaincode: &digitalidcc.DigitalIdentityChainCode{},
 	},
 	{
-		Id:        syscontract.TestContractAddress.Bytes21(),
+		Id:        syscontract.PartitionContractAddress.Bytes(),
+		Enabled:   true,
+		Name:      "partition_manager_sycc",
+		Path:      ".",
+		Version:   "ptn001",
+		InitArgs:  [][]byte{},
+		Chaincode: &partitioncc.PartitionMgr{},
+	},
+	{
+		Id:        syscontract.TestContractAddress.Bytes(),
 		Enabled:   true,
 		Name:      "debug_sycc",
 		Path:      "../syscontract/debugcc/debugcc",
 		Version:   "ptn001",
 		InitArgs:  [][]byte{},
 		Chaincode: &debugcc.DebugChainCode{},
+	},
+	{
+		Id:        syscontract.CoinbaseContractAddress.Bytes(),
+		Enabled:   true,
+		Name:      "coinbase_sycc",
+		Path:      "",
+		Version:   "ptn001",
+		InitArgs:  [][]byte{},
+		Chaincode: &coinbasecc.CoinbaseChainCode{},
+	},
+	{
+		Id:        syscontract.BlacklistContractAddress.Bytes(),
+		Enabled:   true,
+		Name:      "blacklist_sycc",
+		Path:      "./BlacklistContractAddress",
+		Version:   "ptn001",
+		InitArgs:  [][]byte{},
+		Chaincode: &blacklistcc.BlacklistMgr{},
 	},
 	//TODO add other system chaincodes ...
 }
@@ -143,7 +177,7 @@ func DeploySysCCs(chainID string) {
 //in the same process
 func DeDeploySysCCs(chainID string) {
 	for _, sysCC := range systemChaincodes {
-		DeDeploySysCC(chainID, sysCC)
+		DeDeploySysCC(chainID, sysCC, true)
 	}
 }
 

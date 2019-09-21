@@ -75,6 +75,37 @@ func (api *PrivateAdminAPI) RemovePeer(url string) (bool, error) {
 	return true, nil
 }
 
+// AddTrustedPeer allows a remote node to always connect, even if slots are full
+func (api *PrivateAdminAPI) AddTrustedPeer(url string) (bool, error) {
+	// Make sure the server is running, fail otherwise
+	server := api.node.Server()
+	if server == nil {
+		return false, ErrNodeStopped
+	}
+	node, err := discover.ParseNode(url)
+	if err != nil {
+		return false, fmt.Errorf("invalid pnode: %v", err)
+	}
+	server.AddTrustedPeer(node)
+	return true, nil
+}
+
+// RemoveTrustedPeer removes a remote node from the trusted peer set, but it
+// does not disconnect it automatically.
+func (api *PrivateAdminAPI) RemoveTrustedPeer(url string) (bool, error) {
+	// Make sure the server is running, fail otherwise
+	server := api.node.Server()
+	if server == nil {
+		return false, ErrNodeStopped
+	}
+	node, err := discover.ParseNode(url)
+	if err != nil {
+		return false, fmt.Errorf("invalid enode: %v", err)
+	}
+	server.RemoveTrustedPeer(node)
+	return true, nil
+}
+
 // PeerEvents creates an RPC subscription which receives peer events from the
 // node's p2p.Server
 func (api *PrivateAdminAPI) PeerEvents(ctx context.Context) (*rpc.Subscription, error) {
@@ -114,7 +145,8 @@ func (api *PrivateAdminAPI) PeerEvents(ctx context.Context) (*rpc.Subscription, 
 }
 
 // StartRPC starts the HTTP RPC API server.
-func (api *PrivateAdminAPI) StartRPC(host *string, port *int, cors *string, apis *string, vhosts *string) (bool, error) {
+func (api *PrivateAdminAPI) StartRPC(host *string, port *int, cors *string, apis *string,
+	vhosts *string) (bool, error) {
 	api.node.lock.Lock()
 	defer api.node.lock.Unlock()
 
@@ -157,7 +189,8 @@ func (api *PrivateAdminAPI) StartRPC(host *string, port *int, cors *string, apis
 		}
 	}
 
-	if err := api.node.startHTTP(fmt.Sprintf("%s:%d", *host, *port), api.node.rpcAPIs, modules, allowedOrigins, allowedVHosts); err != nil {
+	if err := api.node.startHTTP(fmt.Sprintf("%s:%d", *host, *port), api.node.rpcAPIs, modules,
+		allowedOrigins, allowedVHosts); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -211,7 +244,8 @@ func (api *PrivateAdminAPI) StartWS(host *string, port *int, allowedOrigins *str
 		}
 	}
 
-	if err := api.node.startWS(fmt.Sprintf("%s:%d", *host, *port), api.node.rpcAPIs, modules, origins, api.node.config.WSExposeAll); err != nil {
+	if err := api.node.startWS(fmt.Sprintf("%s:%d", *host, *port), api.node.rpcAPIs, modules, origins,
+		api.node.config.WSExposeAll); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -261,21 +295,49 @@ func (api *PublicAdminAPI) NodeInfo() (*p2p.NodeInfo, error) {
 	return server.NodeInfo(), nil
 }
 
-func (api *PublicAdminAPI) Corss() ([]string, error) {
-	server := api.node.Server()
+func (api *PublicAdminAPI) CorsInfo() (*p2p.NodeInfo, error) {
+	server := api.node.CorsServer()
 	if server == nil {
 		return nil, ErrNodeStopped
 	}
-	return server.Corss(), nil
+	return server.NodeInfo(), nil
 }
 
 func (api *PublicAdminAPI) CorsPeers(protocol string) ([]*p2p.PeerInfo, error) {
-	server := api.node.Server()
+	server := api.node.CorsServer()
 	if server == nil {
 		return nil, ErrNodeStopped
 	}
-	return server.CorsPeerInfo(strings.ToLower(protocol)), nil
+	return server.PeersInfo(), nil
 }
+
+//addCorsPeer
+func (api *PrivateAdminAPI) AddCorsPeer(url string) (bool, error) {
+	server := api.node.CorsServer()
+	if server == nil {
+		return false, ErrNodeStopped
+	}
+	node, err := discover.ParseNode(url)
+	if err != nil {
+		return false, fmt.Errorf("invalid pnode: %v", err)
+	}
+	server.AddPeer(node)
+	return true, nil
+}
+
+////startCorsSync
+//func (api *PublicAdminAPI) StartCorsSync() (bool, error) {
+//	server := api.node.CorsServer()
+//	if server == nil {
+//		return false, ErrNodeStopped
+//	}
+//	node, err := discover.ParseNode(url)
+//	if err != nil {
+//		return false, fmt.Errorf("invalid pnode: %v", err)
+//	}
+//	server.AddPeer(node)
+//	return true, nil
+//}
 
 // Datadir retrieves the current data directory the node is using.
 func (api *PublicAdminAPI) Datadir() string {

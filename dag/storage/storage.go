@@ -20,60 +20,40 @@
 package storage
 
 import (
+	"encoding/json"
+
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/palletone/go-palletone/common/log"
 	"github.com/palletone/go-palletone/common/ptndb"
 	"github.com/palletone/go-palletone/common/util"
-	"github.com/palletone/go-palletone/dag/modules"
 )
 
-// value will serialize to rlp encoding bytes
-func Store(db ptndb.Database, key string, value interface{}) error {
-	return StoreBytes(db, []byte(key), value)
+func StoreToJsonBytes(db ptndb.Putter, key []byte, value interface{}) error {
+	val, err := json.Marshal(value)
+	if err != nil {
+		log.Debugf("json marshal err: %v", err.Error())
+		return err
+	}
+
+	err = db.Put(key, val)
+	if err != nil {
+		log.Debugf("DB put err: %v", err.Error())
+		return err
+	}
+
+	return nil
 }
 
-//func BatchStore(batch ptndb.Batch, key []byte, value interface{}) error {
-//	val, err := rlp.EncodeToBytes(value)
-//	if err != nil {
-//		return err
-//	}
-//	err = batch.Put(key, val)
-//	if err != nil {
-//		log.Error("batch put error", "key:", string(key), "err:", err)
-//	}
-//	return err
-//}
-func StoreBytes(db ptndb.Putter, key []byte, value interface{}) error {
+func StoreToRlpBytes(db ptndb.Putter, key []byte, value interface{}) error {
 	val, err := rlp.EncodeToBytes(value)
 	if err != nil {
 		return err
 	}
 	err = db.Put(key, val)
 	if err != nil {
-		log.Error("StoreBytes", "key:", string(key), "err:", err)
+		log.Error("StoreToRlpBytes", "key:", string(key), "err:", err)
 	}
 	return err
-	/*
-		_, err = db.Get(key)
-		if err != nil {
-			if err.Error() == errors.ErrNotFound.Error() {
-				//	if err == errors.New("not found") {
-				if err := db.Put(key, val); err != nil {
-					return err
-				}
-			} else {
-				return err
-			}
-		} else {
-			if err = db.Delete(key); err != nil {
-				return err
-			}
-			if err := db.Put(key, val); err != nil {
-				return err
-			}
-		}
-		return nil
-	*/
 }
 
 func GetBytes(db ptndb.Database, key []byte) ([]byte, error) {
@@ -83,34 +63,6 @@ func GetBytes(db ptndb.Database, key []byte) ([]byte, error) {
 	}
 	log.Debug("storage GetBytes", "key:", string(key), "value:", string(val))
 	return val, nil
-}
-
-func StoreBytesWithVersion(db ptndb.Putter, key []byte, version *modules.StateVersion, val []byte) error {
-	//val, err := rlp.EncodeToBytes(value)
-	//if err != nil {
-	//	return err
-	//}
-	v := append(version.Bytes(), val...)
-	//
-	//_, err = db.Get(key)
-	//if err != nil {
-	//	if err.Error() == errors.ErrNotFound.Error() {
-	//		//	if err == errors.New("not found") {
-	//		if err := db.Put(key, v); err != nil {
-	//			return err
-	//		}
-	//	} else {
-	//		return err
-	//	}
-	//} else {
-	//	if err = db.Delete(key); err != nil {
-	//		return err
-	//	}
-	if err := db.Put(key, v); err != nil {
-		return err
-	}
-	//}
-	return nil
 }
 
 func StoreString(db ptndb.Putter, key, value string) error {

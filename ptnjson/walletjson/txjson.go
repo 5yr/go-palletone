@@ -20,8 +20,6 @@
 
 package walletjson
 
-import ()
-
 type PaymentJson struct {
 	Inputs  []InputJson  `json:"inputs"`
 	Outputs []OutputJson `json:"outputs"`
@@ -42,7 +40,6 @@ type TxProofJson struct {
 }
 type ContractInvokeRequest struct {
 	ContractAddress string
-	FunctionName    string
 	Args            []string
 }
 type InputJson struct {
@@ -81,7 +78,7 @@ type RawTxjsonGenParams struct {
 //	json.Outputs = []OutputJson{}
 //	if len(payment.Inputs) > 0 {
 //		for _, in := range payment.Inputs {
-//			// @jay :genesis or coinbase unit occured nil error.
+//			// @jay :genesis or coinbase unit occurred nil error.
 //			var hstr string
 //			var mindex uint32
 //			var outindex uint32

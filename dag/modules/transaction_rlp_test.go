@@ -1,6 +1,7 @@
 package modules
 
 import (
+	"encoding/json"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/palletone/go-palletone/common"
 	"github.com/palletone/go-palletone/common/util"
@@ -58,37 +59,6 @@ type TestOutput struct {
 	OutIndex     uint32      `json:"out_index"`
 }
 
-func assertRlpHashEqual(t assert.TestingT, a, b interface{}) {
-	hash1 := util.RlpHash(a)
-	hash2 := util.RlpHash(b)
-	assert.Equal(t, hash1, hash2)
-}
-
-//func assertRlpTxEqual(t assert.TestingT, a, b interface{}) {
-//	tx1 := test
-//	tx2 := Transaction{}
-//	assert.Equal(t, hash1, hash2)
-//}
-
-func TestCompare(t *testing.T) {
-	//	a1 := &TestA{A: 1, B: "A1"}
-	//	a2 := &TestA{A: 2, B: "A2"}
-	//	a3 := &TestA{A: 3, B: "A3", Parent: a1}
-	//	a11 := &TestA{A: 1, B: "A1"}
-	//	a22 := &TestA{A: 2, B: "A2", Parent: &TestA{}}
-	//
-	//	assert.True(t, cmp.Equal(a1, a11))
-	//	assert.False(t, cmp.Equal(a2, a22))
-	//	assert.True(t, cmp.Equal(a3.Parent, a11))
-	//	b1 := &TestB{A:[]byte("A1"), B:2 }
-	//	bytes, err := rlp.EncodeToBytes(b1)
-	//	assert.Nil(t, err)
-	//	t.Logf("Rlp data:%x", bytes)
-	//	b := &TestB{}
-	//	err = rlp.DecodeBytes(bytes, b)
-	//	assert.Equal(t, b1, b)
-}
-
 func TestInput_RLP(t *testing.T) {
 	input := newTestInput(common.HexToHash("0x76a914bd05274d98bb768c0e87a55d9a6024f76beb462a88ac"), 123, 9999, []byte{1, 2, 3}, nil)
 
@@ -107,13 +77,12 @@ func TestInput_RLP(t *testing.T) {
 	input3.Extra = input.Extra
 	bytes3, _ := rlp.EncodeToBytes(input3)
 	assert.Equal(t, bytes, bytes3)
-	assertRlpHashEqual(t, input, input3)
+	assertEqualRlp(t, input, input3)
 }
 
 func TestCoinbaseInput_RLP(t *testing.T) {
 	input := newCoinbaseInput([]byte("unlock"), []byte("extra"))
 	input.Extra = []byte{1, 2, 3}
-	//ptr := *(*byte)(unsafe.Pointer(&input))
 	t.Log("data", input)
 	t.Log("data", input.PreviousTxHash)
 	t.Log("data:", input.SignatureScript == nil)
@@ -131,7 +100,7 @@ func TestCoinbaseInput_RLP(t *testing.T) {
 	input3.Extra = input.Extra
 	bytes3, _ := rlp.EncodeToBytes(input3)
 	assert.Equal(t, bytes, bytes3)
-	assertRlpHashEqual(t, input, input3)
+	assertEqualRlp(t, input, input3)
 }
 
 func TestOutput_Rlp(t *testing.T) {
@@ -160,7 +129,7 @@ func TestPaymentPayload_Rlp(t *testing.T) {
 	err = rlp.DecodeBytes(bytes, pay2)
 	assert.Nil(t, err)
 	t.Logf("Pay:%#v", pay2)
-	assertRlpHashEqual(t, pay, pay2)
+	assertEqualRlp(t, pay, pay2)
 }
 func newTestPayment(includeCoinbase bool) *TestPayment {
 	pay := &TestPayment{LockTime: 123, Inputs: []*TestInput{}, Outputs: []*Output{}}
@@ -213,7 +182,7 @@ func TestDataPayload_Rlp(t *testing.T) {
 	err = rlp.DecodeBytes(bytes, pay2)
 	assert.Nil(t, err)
 	t.Logf("Pay:%#v", pay2)
-	assertRlpHashEqual(t, pay, pay2)
+	assertEqualRlp(t, pay, pay2)
 }
 
 //
@@ -227,21 +196,20 @@ func TestContractTplPayload_Rlp(t *testing.T) {
 	err = rlp.DecodeBytes(bytes, pay2)
 	assert.Nil(t, err)
 	t.Logf("Pay:%#v", pay2)
-	assertRlpHashEqual(t, pay, pay2)
+	assertEqualRlp(t, pay, pay2)
 }
 
 func newTestContractTpl() *ContractTplPayload {
 	pay := &ContractTplPayload{}
-	pay = NewContractTplPayload([]byte("1"), "test", "test", "test", 123, []byte("test"))
+	pay = NewContractTplPayload([]byte("1"), 123, []byte("test"), ContractError{})
 
 	return pay
 }
 
 type TestContractInvokeRequestPayload struct {
-	ContractId   []byte   `json:"contract_id"` // contract id
-	FunctionName string   `json:"function_name"`
-	Args         [][]byte `json:"args"` // contract arguments list
-	Timeout      uint32   `json:"timeout"`
+	ContractId []byte   `json:"contract_id"` // contract id
+	Args       [][]byte `json:"args"`        // contract arguments list
+	Timeout    uint32   `json:"timeout"`
 }
 
 func TestContractInvokeReqPayload_Rlp(t *testing.T) {
@@ -254,14 +222,14 @@ func TestContractInvokeReqPayload_Rlp(t *testing.T) {
 	err = rlp.DecodeBytes(bytes, pay2)
 	assert.Nil(t, err)
 	t.Logf("Pay:%#v", pay2)
-	assertRlpHashEqual(t, pay, pay2)
+	assertEqualRlp(t, pay, pay2)
 }
 
 func newTestContractInvokeReq() *TestContractInvokeRequestPayload {
 	a := []byte("AAAA")
 	b := []byte("BBBBBBBBBBB")
 	args := [][]byte{a, b, nil}
-	pay := &TestContractInvokeRequestPayload{[]byte("ContractId"), "Func1", args, 3}
+	pay := &TestContractInvokeRequestPayload{[]byte("ContractId"), args, 3}
 
 	return pay
 }
@@ -276,28 +244,34 @@ func TestContractInvokeResultPayload_Rlp(t *testing.T) {
 	err = rlp.DecodeBytes(bytes, pay2)
 	assert.Nil(t, err)
 	t.Logf("Pay:%#v", pay2)
-	assertRlpHashEqual(t, pay, pay2)
+	assertEqualRlp(t, pay, pay2)
 }
 
 func newTestContractInvokeResult() *ContractInvokePayload {
-	a := []byte("AAAA")
-	b := []byte("BBBBBBBBBBB")
-	args := [][]byte{a, b, nil}
-
-	version := &StateVersion{&ChainIndex{PTNCOIN, true, 100}, 2}
+	version := &StateVersion{&ChainIndex{PTNCOIN, 100}, 2}
 	read1 := ContractReadSet{"A", version, []byte("This is value")}
 	readset := []ContractReadSet{read1}
-	write1 := ContractWriteSet{false, "Key1", []byte("This is value2")}
+	write1 := ContractWriteSet{IsDelete: false, Key: "Key1", Value: []byte("This is value2")}
 	wset := []ContractWriteSet{write1}
 
 	pay := &ContractInvokePayload{
-		ContractId:   []byte("ContractId"),
-		FunctionName: "Func1",
-		Args:         args,
-		ReadSet:      readset,
-		WriteSet:     wset,
-		ErrorCode:    0,
+		ContractId: []byte("ContractId"),
+		ReadSet:    readset,
+		WriteSet:   wset,
 	}
 
 	return pay
+}
+func TestTx2PaymentsEncode(t *testing.T) {
+	txJson := `{"MsgCount":2,"CertId":"0","Payment":[{"Index":0,"inputs":[{"signature_script":"QRcoSpiaiw98xkVvzp04bLyHq/lEp7IYWBPba4TUrxgHN0/J3Q2enhy5VQrVGQtmHsCDeEKUJZBjh4uJpC4pXUgBIQMhq9yD5ZKi12o4h3gf3LZaASW00W/8tHMjyIzsHiSLYw==","extra":null,"pre_outpoint":{"txhash":"0x186d49c976e3af3f0c1e7fbd17b869d09b8cf0d337f022cbbca12f91f42d637c","message_index":0,"out_index":0}}],"outputs":[{"value":"99999999899999999","pk_script":"dqkUL2JmJDF5IQYe2Dq1ZPqSu4qre1mIrA==","asset":"PTN"}],"lock_time":0},{"Index":1,"inputs":[{"signature_script":"QU6OnHuw5myuTvVUgUK/gQ784qM90uduHTx3heIvNZhNNg2VHoFir8mftoARHJusuKhBw9P8nZkk0zU5D8zsZ4MBIQMhq9yD5ZKi12o4h3gf3LZaASW00W/8tHMjyIzsHiSLYw==","extra":null,"pre_outpoint":{"txhash":"0x186d49c976e3af3f0c1e7fbd17b869d09b8cf0d337f022cbbca12f91f42d637c","message_index":3,"out_index":0}}],"outputs":[{"value":"100000000","pk_script":"FAAAAAAAAAAAAAAAAAAAAAAAAAACyA==","asset":"BTC+80844NCQLQHLTAWJAG1"},{"value":"2099999900000000","pk_script":"dqkUL2JmJDF5IQYe2Dq1ZPqSu4qre1mIrA==","asset":"BTC+80844NCQLQHLTAWJAG1"}],"lock_time":0}],"Text":null,"MediatorCreateOperation":null,"AccountUpdateOperation":null,"Signature":null,"ContractInstallRequest":null,"ContractDeployRequest":null,"ContractInvokeRequest":null,"ContractStopRequest":null,"ContractTpl":null,"ContractDeploy":null,"ContractInvoke":null,"ContractStop":null}`
+	tx := &Transaction{}
+	json.Unmarshal([]byte(txJson), tx)
+	t.Logf("%#v", tx)
+	rlpData, err := rlp.EncodeToBytes(tx)
+	assert.Nil(t, err)
+	t.Logf("Rlpdata:%x", rlpData)
+	tx2 := &Transaction{}
+	err = rlp.DecodeBytes(rlpData, tx2)
+	assert.Nil(t, err)
+	t.Logf("%#v", tx2)
 }

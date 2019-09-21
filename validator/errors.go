@@ -22,7 +22,7 @@ package validator
 
 import "github.com/palletone/go-palletone/dag/errors"
 
-type ValidationCode int32
+type ValidationCode byte
 
 const (
 	TxValidationCode_VALID                        ValidationCode = 0
@@ -39,7 +39,7 @@ const (
 	TxValidationCode_MVCC_READ_CONFLICT           ValidationCode = 11
 	TxValidationCode_PHANTOM_READ_CONFLICT        ValidationCode = 12
 	TxValidationCode_UNKNOWN_TX_TYPE              ValidationCode = 13
-	TxValidationCode_TARGET_CHAIN_NOT_FOUND       ValidationCode = 14
+	TxValidationCode_STATE_DATA_NOT_FOUND         ValidationCode = 14
 	TxValidationCode_MARSHAL_TX_ERROR             ValidationCode = 15
 	TxValidationCode_NIL_TXACTION                 ValidationCode = 16
 	TxValidationCode_EXPIRED_CHAINCODE            ValidationCode = 17
@@ -53,33 +53,35 @@ const (
 	TxValidationCode_INVALID_MSG                  ValidationCode = 25
 	TxValidationCode_INVALID_PAYMMENTLOAD         ValidationCode = 26
 	TxValidationCode_INVALID_PAYMMENT_INPUT       ValidationCode = 27
-	TxValidationCode_INVALID_PAYMMENT_OUTPUT      ValidationCode = 28
-	TxValidationCode_INVALID_PAYMMENT_LOCKTIME    ValidationCode = 29
-	TxValidationCode_INVALID_OUTPOINT             ValidationCode = 30
+	TxValidationCode_INVALID_PAYMMENT_INPUT_COUNT ValidationCode = 28
+	TxValidationCode_INVALID_COINBASE             ValidationCode = 29
+	TxValidationCode_ADDRESS_IN_BLACKLIST             ValidationCode = 30
 	TxValidationCode_INVALID_AMOUNT               ValidationCode = 31
 	TxValidationCode_INVALID_ASSET                ValidationCode = 32
 	TxValidationCode_INVALID_CONTRACT             ValidationCode = 33
 	TxValidationCode_INVALID_DATAPAYLOAD          ValidationCode = 34
 	TxValidationCode_INVALID_DOUBLE_SPEND         ValidationCode = 35
-	TxValidationCode_ORPHAN                       ValidationCode = 998
-	TxValidationCode_NOT_COMPARE_SIZE             ValidationCode = 255
-	TxValidationCode_INVALID_OTHER_REASON         ValidationCode = 256
+	TxValidationCode_INVALID_TOKEN_STATUS         ValidationCode = 36
+	TxValidationCode_NOT_COMPARE_SIZE             ValidationCode = 37
+	TxValidationCode_ORPHAN                       ValidationCode = 255
 
-	UNIT_STATE_AUTHOR_SIGNATURE_PASSED  ValidationCode = 101
-	UNIT_STATE_EMPTY                    ValidationCode = 102
-	UNIT_STATE_INVALID_AUTHOR_SIGNATURE ValidationCode = 103
-	UNIT_STATE_INVALID_GROUP_SIGNATURE  ValidationCode = 104
-	UNIT_STATE_HAS_INVALID_TRANSACTIONS ValidationCode = 105
-	UNIT_STATE_INVALID_SIZE             ValidationCode = 106
-	UNIT_STATE_INVALID_EXTRA_DATA       ValidationCode = 107
-	UNIT_STATE_INVALID_HEADER           ValidationCode = 108
-	UNIT_STATE_INVALID_HEADER_NUMBER    ValidationCode = 109
-	UNIT_STATE_INVALID_HEADER_TXROOT    ValidationCode = 110
-	UNIT_STATE_INVALID_HEADER_TIME      ValidationCode = 111
-	UNIT_STATE_ORPHAN                   ValidationCode = 999
+	TxValidationCode_INVALID_OTHER_REASON         ValidationCode = 251
+	TxValidationCode_NOT_VALIDATED        ValidationCode = 250
+	UNIT_STATE_AUTHOR_SIGNATURE_PASSED   ValidationCode = 101
+	UNIT_STATE_INVALID_MEDIATOR_SCHEDULE ValidationCode = 102
+	UNIT_STATE_INVALID_AUTHOR_SIGNATURE  ValidationCode = 103
+	UNIT_STATE_INVALID_GROUP_SIGNATURE   ValidationCode = 104
+	UNIT_STATE_HAS_INVALID_TRANSACTIONS  ValidationCode = 105
+	UNIT_STATE_INVALID_AUTHOR              ValidationCode = 106
+	UNIT_STATE_INVALID_EXTRA_DATA        ValidationCode = 107
+	UNIT_STATE_INVALID_HEADER            ValidationCode = 108
+	UNIT_STATE_INVALID_HEADER_NUMBER     ValidationCode = 109
+	UNIT_STATE_INVALID_HEADER_TXROOT     ValidationCode = 110
+	UNIT_STATE_INVALID_HEADER_TIME       ValidationCode = 111
+	UNIT_STATE_ORPHAN                    ValidationCode = 254
 )
 
-var validationCode_name = map[int32]string{
+var validationCode_name = map[byte]string{
 	0:   "VALID",
 	1:   "INVALID_CONTRACT_TEMPLATE",
 	2:   "INVALID_FEE",
@@ -94,7 +96,7 @@ var validationCode_name = map[int32]string{
 	11:  "MVCC_READ_CONFLICT",
 	12:  "PHANTOM_READ_CONFLICT",
 	13:  "UNKNOWN_TX_TYPE",
-	14:  "TARGET_CHAIN_NOT_FOUND",
+	14:  "STATE_DATA_NOT_FOUND",
 	15:  "MARSHAL_TX_ERROR",
 	16:  "NIL_TXACTION",
 	17:  "EXPIRED_CHAINCODE",
@@ -108,20 +110,22 @@ var validationCode_name = map[int32]string{
 	25:  "INVALID_MSG",
 	26:  "INVALID_PAYMMENTLOAD",
 	27:  "INVALID_PAYMMENT_INPUT",
-	28:  "INVALID_PAYMMENT_OUTPUT",
-	29:  "INVALID_PAYMMENT_LOCKTIME",
-	30:  "INVALID_OUTPOINT",
+	28:  "INVALID_PAYMMENT_INPUT_COUNT",
+	29:  "INVALID_PAYMMENT_COINBASE",
+	30:  "ADDRESS_IN_BLACKLIST",
 	31:  "INVALID_AMOUNT",
 	32:  "INVALID_ASSET",
 	33:  "INVALID_CONTRACT",
 	34:  "INVALID_DATAPAYLOAD",
 	35:  "DOUBLE_SPEND",
+	36:  "INVALID_TOKEN_STATUS",
+	37:  "NOT_COMPARE_SIZE",
 	101: "AUTHOR_SIGNATURE_PASSED",
-	102: "EMPTY",
+	102: "UNIT_STATE_INVALID_MEDIATOR_SCHEDULE",
 	103: "INVALID_AUTHOR_SIGNATURE",
 	104: "INVALID_GROUP_SIGNATURE",
 	105: "HAS_INVALID_TRANSACTIONS",
-	106: "INVALID_SIZE",
+	106: "INVALID_AUTHOR",
 	107: "INVALID_EXTRA_DATA",
 	108: "INVALID_HEADER",
 	109: "CHECK_HEADER_PASSED",
@@ -129,18 +133,18 @@ var validationCode_name = map[int32]string{
 	111: "INVALID_HEADER_TIME",
 	125: "OTHER_ERROR",
 
-	254: "NOT_VALIDATED",
-	255: "NOT_COMPARE_SIZE",
-	256: "INVALID_OTHER_REASON",
-	998: "ORPHAN TX",
-	999: "ORPHAN UNIT",
+	251: "NOT_VALIDATED",
+
+	250: "INVALID_OTHER_REASON",
+	255: "ORPHAN TX",
+	254: "ORPHAN UNIT",
 }
 
 func NewValidateError(code ValidationCode) error {
 	if code == TxValidationCode_VALID {
 		return nil
 	}
-	return errors.New(validationCode_name[int32(code)])
+	return errors.New(validationCode_name[byte(code)])
 }
 func IsOrphanError(err error) bool {
 	return err.Error() == "ORPHAN TX" || err.Error() == "ORPHAN UNIT"

@@ -21,16 +21,17 @@
 package storage
 
 import (
-	"github.com/palletone/go-palletone/common/ptndb"
-
-	"github.com/palletone/go-palletone/dag/modules"
-
 	"encoding/json"
+	"errors"
 	"fmt"
+
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/palletone/go-palletone/common"
+	"github.com/palletone/go-palletone/common/log"
+	"github.com/palletone/go-palletone/common/ptndb"
 	"github.com/palletone/go-palletone/contracts/syscontract"
-	"github.com/palletone/go-palletone/core"
-	"strings"
+	"github.com/palletone/go-palletone/dag/constants"
+	"github.com/palletone/go-palletone/dag/modules"
 )
 
 //保存了对合约写集、Config、Asset信息
@@ -42,136 +43,52 @@ func NewStateDb(db ptndb.Database) *StateDb {
 	return &StateDb{db: db}
 }
 
-// ######################### SAVE IMPL START ###########################
+func storeBytesWithVersion(db ptndb.Putter, key []byte, version *modules.StateVersion, val []byte) error {
+	v := append(version.Bytes(), val...)
+	if err := db.Put(key, v); err != nil {
+		return err
+	}
+	return nil
+}
 
-//func (statedb *StateDb) SaveAssetInfo(assetInfo *modules.AssetInfo) error {
-//	key := assetInfo.Tokey()
-//	return StoreBytes(statedb.db, key, assetInfo)
-//}
+func retrieveWithVersion(db ptndb.Database, key []byte) ([]byte, *modules.StateVersion, error) {
+	data, err := db.Get(key)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return splitValueAndVersion(data)
+}
+
+//将Statedb里的Value分割为Version和用户数据
+func splitValueAndVersion(data []byte) ([]byte, *modules.StateVersion, error) {
+	if len(data) < 28 {
+		return nil, nil, errors.New("the data is irregular.")
+	}
+	verBytes := data[:28]
+	objData := data[28:]
+	version := &modules.StateVersion{}
+	version.SetBytes(verBytes)
+	return objData, version, nil
+}
 
 func (statedb *StateDb) DeleteState(key []byte) error {
 	return statedb.db.Delete(key)
 }
-
-// ######################### SAVE IMPL END ###########################
-
-// ######################### GET IMPL START ###########################
-
-//func (statedb *StateDb) GetAssetInfo(assetId *modules.Asset) (*modules.AssetInfo, error) {
-//	key := append(constants.ASSET_INFO_PREFIX, assetId.AssetId.String()...)
-//	data, err := statedb.db.Get(key)
-//	if err != nil {
-//		return nil, err
-//	}
-//
-//	var assetInfo modules.AssetInfo
-//	err = rlp.DecodeBytes(data, &assetInfo)
-//
-//	if err != nil {
-//		return nil, err
-//	}
-//	return &assetInfo, nil
-//}
 
 // get prefix: return maps
 func (db *StateDb) GetPrefix(prefix []byte) map[string][]byte {
 	return getprefix(db.db, prefix)
 }
 
-// ######################### GET IMPL END ###########################
-
-func (statedb *StateDb) StoreMediator(med *core.Mediator) error {
-	return StoreMediator(statedb.db, med)
-}
-
-func (statedb *StateDb) StoreMediatorInfo(add common.Address, mi *modules.MediatorInfo) error {
-	return StoreMediatorInfo(statedb.db, add, mi)
-}
-
-func (statedb *StateDb) RetrieveMediatorInfo(address common.Address) (*modules.MediatorInfo, error) {
-	return RetrieveMediatorInfo(statedb.db, address)
-}
-
-func (statedb *StateDb) RetrieveMediator(address common.Address) (*core.Mediator, error) {
-	return RetrieveMediator(statedb.db, address)
-}
-
-//func (statedb *StateDb) SaveChainIndex(index *modules.ChainIndex) error {
-//	bytes, err := rlp.EncodeToBytes(index)
-//	if err != nil {
-//		return err
-//	}
-//	key := constants.CURRENTCHAININDEX_PREFIX + index.AssetID.String()
-//	if err := statedb.db.Put([]byte(key), bytes); err != nil {
-//		return err
-//	}
-//	return nil
-//}
-//func (statedb *StateDb) GetCurrentChainIndex(assetId modules.AssetId) (*modules.ChainIndex, error) {
-//	// get current chainIndex
-//	key := constants.CURRENTCHAININDEX_PREFIX + assetId.String()
-//	bytes, err := statedb.db.Get([]byte(key))
-//	if err != nil {
-//		return nil, err
-//	}
-//	chainIndex := new(modules.ChainIndex)
-//	if err := rlp.DecodeBytes(bytes, &chainIndex); err != nil {
-//		return nil, err
-//	}
-//	return chainIndex, nil
-//}
-
-func (statedb *StateDb) GetMediatorCount() int {
-	return GetMediatorCount(statedb.db)
-}
-
-func (statedb *StateDb) IsMediator(address common.Address) bool {
-	return IsMediator(statedb.db, address)
-}
-
-func (statedb *StateDb) GetMediators() map[common.Address]bool {
-	return GetMediators(statedb.db)
-}
-
-func (statedb *StateDb) LookupMediator() map[common.Address]*core.Mediator {
-	return LookupMediator(statedb.db)
-}
-
-//xiaozhi
-func (statedb *StateDb) GetApprovedMediatorList() ([]*modules.MediatorRegisterInfo, error) {
+func (statedb *StateDb) GetJuryCandidateList() (map[string]bool, error) {
 	depositeContractAddress := syscontract.DepositContractAddress
-	val, _, err := statedb.GetContractState(depositeContractAddress.Bytes(), "MediatorList")
-	if err != nil {
-		return nil, fmt.Errorf("mediator candidate list is nil.")
-	}
-	var candidateList []*modules.MediatorRegisterInfo
-	err = json.Unmarshal(val, &candidateList)
-	if err != nil {
-		return nil, err
-	}
-	return candidateList, nil
-}
-
-func (statedb *StateDb) IsApprovedMediator(address common.Address) bool {
-	list, err := statedb.GetApprovedMediatorList()
-	if err != nil {
-		return false
-	}
-	for _, v := range list {
-		if strings.Compare(v.Address, address.String()) == 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func (statedb *StateDb) GetJuryCandidateList() ([]common.Address, error) {
-	depositeContractAddress := syscontract.DepositContractAddress
-	val, _, err := statedb.GetContractState(depositeContractAddress.Bytes(), "JuryList")
+	val, _, err := statedb.GetContractState(depositeContractAddress.Bytes(), modules.JuryList)
 	if err != nil {
 		return nil, fmt.Errorf("jury candidate list is nil.")
 	}
-	var candidateList []common.Address
+
+	candidateList := make(map[string]bool)
 	err = json.Unmarshal(val, &candidateList)
 	if err != nil {
 		return nil, err
@@ -184,120 +101,100 @@ func (statedb *StateDb) IsInJuryCandidateList(address common.Address) bool {
 	if err != nil {
 		return false
 	}
-	for _, v := range list {
-		if strings.Compare(v.String(), address.String()) == 0 {
+	if _, ok := list[address.String()]; ok {
+		return true
+	}
+	return false
+}
+
+func (statedb *StateDb) GetAllJuror() (map[string]*modules.Juror, error) {
+	depositeContractAddress := syscontract.DepositContractAddress
+	juryvalues, err := statedb.GetContractStatesByPrefix(depositeContractAddress.Bytes(), string(constants.DEPOSIT_JURY_BALANCE_PREFIX))
+	if err != nil {
+		return nil, err
+	}
+	if len(juryvalues) > 0 {
+		jurynode := make(map[string]*modules.Juror)
+		for a, v := range juryvalues {
+			n := modules.Juror{}
+			err := json.Unmarshal(v.Value, &n)
+			if err != nil {
+				return nil, err
+			}
+			jurynode[a] = &n
+		}
+		return jurynode, nil
+	}
+	return nil, nil
+}
+
+func (statedb *StateDb) GetJurorByAddr(addr string) (*modules.Juror, error) {
+	depositeContractAddress := syscontract.DepositContractAddress
+	key := string(constants.DEPOSIT_JURY_BALANCE_PREFIX) + addr
+	val, _, err := statedb.GetContractState(depositeContractAddress.Bytes(), key)
+	if err != nil {
+		return nil, err
+	}
+	juror := &modules.Juror{}
+	err = json.Unmarshal(val, juror)
+	if err != nil {
+		return nil, err
+	}
+	return juror, nil
+}
+
+func (statedb *StateDb) GetContractDeveloperList() ([]common.Address, error) {
+	depositeContractAddress := syscontract.DepositContractAddress
+	val, _, err := statedb.GetContractState(depositeContractAddress.Bytes(), modules.DeveloperList)
+	if err != nil {
+		return nil, fmt.Errorf("devCc candidate list is nil.")
+	}
+	depList := make(map[string]bool)
+	err = json.Unmarshal(val, &depList)
+	if err != nil {
+		return nil, err
+	}
+	res := make([]common.Address, len(depList))
+	for addStr := range depList {
+		add, err := common.StringToAddress(addStr)
+		if err != nil {
+			log.Debugf(err.Error())
+			continue
+		}
+		res = append(res, add)
+	}
+	return res, nil
+}
+
+func (statedb *StateDb) IsInContractDeveloperList(address common.Address) bool {
+	list, err := statedb.GetContractDeveloperList()
+	if err != nil {
+		return false
+	}
+	for _, d := range list {
+		if d.Equal(address) {
 			return true
 		}
 	}
 	return false
 }
 
-func (statedb *StateDb) UpdateSysParams(version *modules.StateVersion) error {
-	//基金会单独修改的
-	var err error
-	modifies, err := statedb.GetSysParamWithoutVote()
+func (statedb *StateDb) GetDataVersion() (*modules.DataVersion, error) {
+	data, err := statedb.db.Get(constants.DATA_VERSION_KEY)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	//基金会发起投票的
-	info, err := statedb.GetSysParamsWithVotes()
-	if err != nil {
-		return err
+	data_version := new(modules.DataVersion)
+	if err := rlp.DecodeBytes(data, data_version); err != nil {
+		return nil, err
 	}
-	if modifies == nil && info == nil {
-		return nil
-	}
-	//获取当前的version
-	if len(modifies) > 0 {
-		for _, v := range modifies {
-			err = statedb.SaveSysConfig(v.Key, []byte(v.Value), version)
-			if err != nil {
-				return err
-			}
-		}
-		//将基金会当前单独修改的制为nil
-		err = statedb.SaveSysConfig("sysParam", nil, version)
-		if err != nil {
-			return err
-		}
-	}
-	if info == nil {
-		return nil
-	}
-	foundAddr, _, err := statedb.GetConfig("FoundationAddress")
-	if err != nil {
-		return err
-	}
-	if info.CreateAddr != string(foundAddr) {
-		return fmt.Errorf("only foundation can call this function")
-	}
-	if !info.IsVoteEnd {
-		return nil
-	}
-	for _, v1 := range info.SupportResults {
-		for _, v2 := range v1.VoteResults {
-			//TODO
-			if v2.Num >= info.LeastNum {
-				err = statedb.SaveSysConfig(v1.TopicTitle, []byte(v2.SelectOption), version)
-				if err != nil {
-					return err
-				}
-				break
-			}
-		}
-	}
-	//将基金会当前投票修改的制为nil
-	err = statedb.SaveSysConfig("sysParams", nil, version)
-	if err != nil {
-		return err
-	}
-	return nil
+	return data_version, nil
 }
 
-func (statedb *StateDb) GetSysParamWithoutVote() ([]*modules.FoundModify, error) {
-	val, _, err := statedb.GetConfig("sysParam")
-	if err != nil {
-		return nil, err
-	}
-	var modifies []*modules.FoundModify
-	if val == nil {
-		return nil, err
-	} else if len(val) > 0 {
-		err := json.Unmarshal(val, &modifies)
-		if err != nil {
-			return nil, err
-		}
-		return modifies, nil
-	} else {
-		return nil, nil
-	}
-}
-
-func (statedb *StateDb) GetSysParamsWithVotes() (*modules.SysTokenIDInfo, error) {
-	val, _, err := statedb.GetConfig("sysParams")
-	if err != nil {
-		return nil, err
-	}
-	info := &modules.SysTokenIDInfo{}
-	if val == nil {
-		return nil, err
-	} else if len(val) > 0 {
-		err := json.Unmarshal(val, info)
-		if err != nil {
-			return nil, err
-		}
-		return info, nil
-	} else {
-		return nil, nil
-	}
-}
-
-func (statedb *StateDb) SaveSysConfig(key string, val []byte, ver *modules.StateVersion) error {
-	//SaveContractState(id []byte, name string, value interface{}, version *modules.StateVersion)
-	id := syscontract.SysConfigContractAddress.Bytes21()
-	err := statedb.SaveContractState(id, key, val, ver)
+func (statedb *StateDb) SaveDataVersion(dv *modules.DataVersion) error {
+	data, err := rlp.EncodeToBytes(dv)
 	if err != nil {
 		return err
 	}
-	return nil
+	return statedb.db.Put(constants.DATA_VERSION_KEY, data)
 }

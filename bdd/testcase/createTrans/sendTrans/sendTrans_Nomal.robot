@@ -1,29 +1,35 @@
 *** Settings ***
-Library           RequestsLibrary
-Library           Collections
+Default Tags      nomal
+Library           ../../utilFunc/createToken.py
+Resource          ../../utilKwd/utilVariables.txt
 Resource          ../../utilKwd/utilDefined.txt
 Resource          ../../utilKwd/behaveKwd.txt
 Resource          ../../utilKwd/normalKwd.txt
 
 *** Variables ***
-${host}           http://localhost:8545/
-${geneAdd}        P1CwGYGSjWSaJrysHAjAWtDyFSsbcYwoULv
-${recieverAdd}    P11LKXXsDuKUdo3cJEy7uMnqnvw4kwHPs8
-${givenAmount}    10
-@{transList}      ${geneAdd}    ${recieverAdd}    ${givenAmount}    2
-${PTN}            \d+
-${result_code}    \f[a-z0-9]*
-${result_hex}     \f[a-z0-9]*
-${result_txid}    \0[a-z0-9]{60,70}
-${sendResult}     [a-z0-9]*
 
 *** Test Cases ***
-sendTransNormal
+Scenario: createTrans - Send Transaction
+    [Documentation]    Verify PTN after sending
     [Tags]    normal
-    #Author:Miho
+    sleep    4
+    ${PTN1}    Given Request getbalance before create transaction
+    ${ret1}    And normalCrtTrans    ${geneAdd}    ${recieverAdd}    ${PTNAmount}    ${PTNPoundage}
+    ${ret2}    And normalSignTrans    ${ret1}    ${signType}    ${pwd}
+    ${ret3}    And normalSendTrans    ${ret2}
+    sleep    4
+    Then Request getbalance after create transaction    ${PTN1}
+
+*** Keywords ***
+Request getbalance before create transaction
+    ${geneAdd}    getGeneAdd    ${host}
+    Set Suite Variable    ${geneAdd}    ${geneAdd}
     ${PTN1}    ${result1}    normalGetBalance    ${recieverAdd}
-    ${result11}    Evaluate    ${PTN1}+${givenAmount}
-    ${sendResult}    normalSendTrans
-    Sleep    3
+    ${PTNGAIN}    Evaluate    decimal.Decimal('${PTN1}')+decimal.Decimal('${PTNAmount}')    decimal
+    [Return]    ${PTNGAIN}
+
+Request getbalance after create transaction
+    [Arguments]    ${PTNGAIN}
+    Sleep    4
     ${PTN2}    ${result2}    normalGetBalance    ${recieverAdd}
-    Should Be Equal As Strings    ${result11}    ${PTN2}
+    Should Be Equal As Numbers    ${PTNGAIN}    ${PTN2}

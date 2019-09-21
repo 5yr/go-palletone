@@ -23,18 +23,18 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/palletone/go-palletone/common"
 	"github.com/palletone/go-palletone/common/log"
 	"github.com/palletone/go-palletone/common/ptndb"
-	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/palletone/go-palletone/dag/constants"
 	"github.com/palletone/go-palletone/dag/modules"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestUnitNumberIndex(t *testing.T) {
-	key1 := fmt.Sprintf("%s_%s_%d", constants.UNIT_HASH_NUMBER_Prefix, modules.BTCCOIN.String(), 10000)
-	key2 := fmt.Sprintf("%s_%s_%d", constants.UNIT_HASH_NUMBER_Prefix, modules.PTNCOIN.String(), 678934)
+	key1 := fmt.Sprintf("%s_%s_%d", constants.UNIT_HASH_NUMBER_PREFIX, modules.BTCCOIN.String(), 10000)
+	key2 := fmt.Sprintf("%s_%s_%d", constants.UNIT_HASH_NUMBER_PREFIX, modules.PTNCOIN.String(), 678934)
 
 	if key1 != "nh_btcoin_10000" {
 		log.Debug("not equal.", "key1", key1)
@@ -43,34 +43,13 @@ func TestUnitNumberIndex(t *testing.T) {
 		log.Debug("not equal.", "key2", key2)
 	}
 }
-func TestGetCurrentChainIndex(t *testing.T) {
-	//dbconn := ReNewDbConn("/Users/jay/code/gocode/src/github.com/palletone/go-palletone/bin/work/gptn/leveldb/")
-	dbconn, _ := ptndb.NewMemDatabase()
-	if dbconn == nil {
-		fmt.Println("Connect to db error.")
-		return
-	}
-
-	prefix_db := dbconn.NewIteratorWithPrefix([]byte(constants.CURRENTCHAININDEX_PREFIX))
-	for prefix_db.Next() {
-		key := prefix_db.Key()
-		fmt.Println("key:", string(key))
-		value := prefix_db.Value()
-		chain_index := new(modules.ChainIndex)
-		err := rlp.DecodeBytes(value, &chain_index)
-		fmt.Println("value:", err, chain_index.String(), chain_index.AssetID, chain_index.Index, chain_index.IsMain)
-
-	}
-}
 
 func TestGetBody(t *testing.T) {
-	// dbconn := ReNewDbConn("/Users/jay/code/gocode/src/github.com/palletone/go-palletone/bin/work/palletone/gptn/leveldb/")
 	dbconn, _ := ptndb.NewMemDatabase()
 	if dbconn == nil {
 		fmt.Println("Connect to db error.")
 		return
 	}
-	//key := append(constants.BODY_PREFIX, []byte("0x413a2fbc2c21258a9f813c53e81ecf02defeaa2b71a6a038cecd554e48ba0dc7")...)
 	key := "ub0x6fc88cbedc9c99d238c10374274443d4460de9162795faf8a3442abe33db72fa"
 	data, err := dbconn.Get([]byte(key))
 	if err != nil {
@@ -123,15 +102,14 @@ func TestRLPTxDecode(t *testing.T) {
 	}
 	msg2 := &modules.Message{
 		App:     modules.APP_DATA,
-		Payload: &modules.DataPayload{MainData: []byte("Hello PalletOne"),ExtraData:[]byte("Hi PalletOne")},
+		Payload: &modules.DataPayload{MainData: []byte("Hello PalletOne"), ExtraData: []byte("Hi PalletOne")},
 	}
 
-	req := &modules.ContractInvokeRequestPayload{ContractId: []byte{0xcc}, FunctionName: "TestFun", Args: [][]byte{[]byte{0x11}, {0x22}}}
+	req := &modules.ContractInvokeRequestPayload{ContractId: []byte{0xcc}, Args: [][]byte{[]byte{0x11}, {0x22}}}
 	msg3 := &modules.Message{App: modules.APP_CONTRACT_INVOKE_REQUEST, Payload: req}
 	txmsg3 := modules.NewTransaction(
 		[]*modules.Message{msg, msg2, msg3},
 	)
-	// dbconn := ReNewDbConn("/Users/jay/code/gocode/src/github.com/palletone/go-palletone/bin/work/palletone/gptn/leveldb/")
 	dbconn, _ := ptndb.NewMemDatabase()
 	tx_bytes, _ := rlp.EncodeToBytes(txmsg3)
 	key := []byte("this_is_testing_tx_encode_decode")
@@ -160,5 +138,6 @@ func TestRLPTxDecode(t *testing.T) {
 		}
 
 	}
-	assert.Equal(t, txmsg3, tx)
+	assert.Equal(t, txmsg3.Hash(), tx.Hash())
+
 }

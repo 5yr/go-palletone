@@ -23,6 +23,7 @@ package modules
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/palletone/go-palletone/common"
@@ -42,18 +43,42 @@ const (
 	tfModified
 )
 
+//Unspent Transaction Output
 type Utxo struct {
 	Amount   uint64 `json:"amount"`    // 数量
 	Asset    *Asset `json:"asset"`     // 资产类别
 	PkScript []byte `json:"pk_script"` // 锁定脚本
 	LockTime uint32 `json:"lock_time"`
-	//VoteResult common.Address `json:"vote_info"` //这个字段删掉
 	// flags contains additional info about output such as whether it is spent, and whether is has
 	// been modified since is was loaded.
-	Timestamp uint64 `json:"timestamp"` //Unit's Timestamp
+	Timestamp uint64 `json:"timestamp"` // unit's Timestamp
 	Flags     txoFlags
 }
 
+//Spent Transaction Output
+type Stxo struct {
+	Amount   uint64 `json:"amount"`    // 数量
+	Asset    *Asset `json:"asset"`     // 资产类别
+	PkScript []byte `json:"pk_script"` // 锁定脚本
+	LockTime uint32 `json:"lock_time"`
+	// flags contains additional info about output such as whether it is spent, and whether is has
+	// been modified since is was loaded.
+	Timestamp   uint64      `json:"timestamp"` // unit's Timestamp
+	SpentByTxId common.Hash `json:"spent_by_tx_id"`
+	SpentTime   uint64      `json:"spent_time"`
+}
+
+func NewStxo(utxo *Utxo, spentTxId common.Hash, spentTime uint64) *Stxo {
+	return &Stxo{
+		Amount:      utxo.Amount,
+		Asset:       utxo.Asset,
+		PkScript:    utxo.PkScript,
+		LockTime:    utxo.LockTime,
+		Timestamp:   utxo.Timestamp,
+		SpentByTxId: spentTxId,
+		SpentTime:   spentTime,
+	}
+}
 func NewUtxo(output *Output, lockTime uint32, timestamp int64) *Utxo {
 	return &Utxo{
 		Amount:    output.Value,
@@ -66,17 +91,34 @@ func NewUtxo(output *Output, lockTime uint32, timestamp int64) *Utxo {
 func (u *Utxo) GetTimestamp() int64 {
 	return int64(u.Timestamp)
 }
+func (u *Utxo) Bytes() []byte {
+	data, _ := rlp.EncodeToBytes(u)
+	return data
+}
+func (utxo *Utxo) GetCoinDays() uint64 {
+	if utxo.Timestamp == 0 {
+		return 0
+	}
+	holdSecond := time.Now().Unix() - utxo.GetTimestamp()
+
+	holdDays := holdSecond / 86400 //24*60*60
+	return uint64(holdDays) * utxo.Amount
+}
 
 type UtxoWithOutPoint struct {
-	Utxo
+	*Utxo
 	OutPoint
 }
 
+func NewUtxoWithOutPoint(utxo *Utxo, o OutPoint) *UtxoWithOutPoint {
+	uto := &UtxoWithOutPoint{Utxo: utxo, OutPoint: o}
+	return uto
+}
 func (u *UtxoWithOutPoint) GetAmount() uint64 {
 	return u.Amount
 }
 func (u *UtxoWithOutPoint) Set(utxo *Utxo, o *OutPoint) {
-	u.Utxo = *utxo
+	u.Utxo = utxo
 	u.OutPoint = *o
 }
 
@@ -180,27 +222,12 @@ func (utxoIndex *UtxoIndex) ToKey() []byte {
 	key = append(key, utxoIndex.Asset.Bytes()...)
 	key = append(key, utxoIndex.OutPoint.Bytes()...)
 	return key[:]
-	//	key := fmt.Sprintf("%s%s||%s||%s",
-	//	constants.UTXO_INDEX_PREFIX,
-	//	utxoIndex.AccountAddr.String(),
-	//	utxoIndex.Asset.String(),
-	//	utxoIndex.OutPoint.String())
-	//return []byte(key)
 }
 
 func (outpoint *OutPoint) ToKey() []byte {
-	// key: [UTXO_PREFIX][TxHash][MessageIndex][OutIndex]
 	key := append(constants.UTXO_PREFIX, outpoint.Bytes()...)
-	//key = append(key, common.EncodeNumberUint32(outpoint.MessageIndex)...)
-	//key = append(key, common.EncodeNumberUint32(outpoint.OutIndex)...)
 	return key[:]
-
 }
-
-//func (outpoint *OutPoint) ToKeyStr() string {
-//	b := outpoint.ToKey()
-//	return string(b)
-//}
 
 func (outpoint *OutPoint) SetString(data string) error {
 	rs := []rune(data)
@@ -212,13 +239,9 @@ func (outpoint *OutPoint) SetString(data string) error {
 }
 
 func (outpoint *OutPoint) Bytes() []byte {
-
 	data := append(outpoint.TxHash.Bytes(), common.EncodeNumberUint32(outpoint.MessageIndex)...)
 	data = append(data, common.EncodeNumberUint32(outpoint.OutIndex)...)
-	//data, err := rlp.EncodeToBytes(outpoint)
-	//if err != nil {
-	//	return nil
-	//}
+
 	return data
 }
 func (outpoint *OutPoint) Hash() common.Hash {
@@ -253,67 +276,9 @@ func KeyToOutpoint(key []byte) *OutPoint {
 	return vout
 }
 
-type Output struct {
-	Value    uint64 `json:"value,string"`
-	PkScript []byte `json:"pk_script"`
-	Asset    *Asset `json:"asset"`
-}
-
-type Input struct {
-	SignatureScript  []byte    `json:"signature_script"`
-	Extra            []byte    `json:"extra" rlp:"nil"` // if user creating a new asset, this field should be it's config data. Otherwise it is null.
-	PreviousOutPoint *OutPoint `json:"pre_outpoint"`
-}
-
-// NewTxIn returns a new ptn transaction input with the provided
-// previous outpoint point and signature script with a default sequence of
-// MaxTxInSequenceNum.
-func NewTxIn(prevOut *OutPoint, signatureScript []byte) *Input {
-	return &Input{
-		PreviousOutPoint: prevOut,
-		SignatureScript:  signatureScript,
-	}
-}
-
 type SpendProof struct {
 	Unit string `json:"unit"`
 }
-
-/**
-保存Asset属性信息结构体
-structure for saving asset property infomation
-*/
-//type AssetInfo struct {
-//	GasToken          string         `json:"alias"`           // asset name
-//	AssetID        *Asset         `json:"asset_id"`        // asset id
-//	InitialTotal   uint64         `json:"initial_total"`   // total circulation
-//	Decimal        uint32         `json:"deciaml"`         // asset accuracy
-//	DecimalUnit    string         `json:"unit"`            // asset unit
-//	OriginalHolder common.Address `json:"original_holder"` // holder address when creating the asset
-//}
-//
-//func (assetInfo *AssetInfo) Tokey() []byte {
-//	key := fmt.Sprintf("%s%s",
-//		constants.ASSET_INFO_PREFIX,
-//		assetInfo.AssetID.AssetId.String())
-//	return []byte(key)
-//}
-//
-//func (assetInfo *AssetInfo) Print() {
-//	fmt.Println("Asset alias", assetInfo.GasToken)
-//	fmt.Println("Asset Assetid", assetInfo.AssetID.AssetId)
-//	fmt.Println("Asset UniqueId", assetInfo.AssetID.UniqueId)
-//	//fmt.Println("Asset ChainId", assetInfo.AssetID.ChainId)
-//	fmt.Println("Asset Decimal", assetInfo.Decimal)
-//	fmt.Println("Asset DecimalUnit", assetInfo.DecimalUnit)
-//	fmt.Println("Asset OriginalHolder", assetInfo.OriginalHolder.String())
-//}
-
-//type AccountToken struct {
-//	GasToken   string `json:"alias"`
-//	AssetID *Asset `json:"asset_id"`
-//	Balance uint64 `json:"balance"`
-//}
 
 func UtxoFlags2String(flag txoFlags) string {
 	var str string

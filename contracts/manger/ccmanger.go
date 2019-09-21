@@ -19,26 +19,23 @@
 package manger
 
 import (
-	"crypto/md5"
-	"encoding/hex"
-	"fmt"
-	"github.com/golang/protobuf/proto"
-	"google.golang.org/grpc"
-	"io"
 	"net"
-	"os"
 	"time"
+	"strings"
+	"google.golang.org/grpc"
 
+	"github.com/golang/protobuf/proto"
+	"github.com/palletone/go-palletone/common/crypto"
+	"github.com/palletone/go-palletone/common/log"
 	"github.com/palletone/go-palletone/contracts/accesscontrol"
-	cfg "github.com/palletone/go-palletone/contracts/contractcfg"
 	"github.com/palletone/go-palletone/contracts/core"
 	"github.com/palletone/go-palletone/contracts/scc"
-	"github.com/palletone/go-palletone/core/vmContractPub/crypto"
 	"github.com/palletone/go-palletone/core/vmContractPub/protos/common"
 	"github.com/palletone/go-palletone/core/vmContractPub/protos/peer"
-	pb "github.com/palletone/go-palletone/core/vmContractPub/protos/peer"
 	"github.com/palletone/go-palletone/core/vmContractPub/util"
-	"github.com/palletone/go-palletone/common/log"
+	pb "github.com/palletone/go-palletone/core/vmContractPub/protos/peer"
+	cfg "github.com/palletone/go-palletone/contracts/contractcfg"
+	cm "github.com/palletone/go-palletone/common"
 )
 
 func marshalOrPanic(pb proto.Message) []byte {
@@ -89,12 +86,12 @@ func createChaincodeProposalWithTxIDNonceAndTransient(txid string, typ common.He
 	return &peer.Proposal{Header: hdrBytes, Payload: ccPropPayloadBytes}, txid, nil
 }
 
-func computeProposalTxID(nonce, creator []byte) (string, error) {
-	opdata := append(nonce, creator...)
-	digest := util.ComputeSHA256(opdata)
-
-	return hex.EncodeToString(digest), nil
-}
+//func computeProposalTxID(nonce, creator []byte) (string, error) {
+//	opdata := append(nonce, creator...)
+//	digest := util.ComputeSHA256(opdata)
+//
+//	return hex.EncodeToString(digest), nil
+//}
 
 func createChaincodeProposalWithTransient(typ common.HeaderType, chainID string, txid string, cis *peer.ChaincodeInvocationSpec, creator []byte, transientMap map[string][]byte) (*peer.Proposal, string, error) {
 	// generate a random nonce
@@ -114,7 +111,7 @@ func GetBytesProposal(prop *peer.Proposal) ([]byte, error) {
 	return propBytes, err
 }
 
-func signedEndorserProposa(chainID string, txid string, cs *peer.ChaincodeSpec, creator, signature []byte) (*peer.SignedProposal, *peer.Proposal, error) {
+func SignedEndorserProposa(chainID string, txid string, cs *peer.ChaincodeSpec, creator, signature []byte) (*peer.SignedProposal, *peer.Proposal, error) {
 	prop, _, err := createChaincodeProposal(
 		common.HeaderType_ENDORSER_TRANSACTION,
 		chainID,
@@ -156,14 +153,14 @@ func peerServerInit(jury core.IAdapterJury) error {
 		peerAddress = "0.0.0.0:21726"
 	}
 	//TODO peer
-	log.Infof("peerServerInit listen tcp == %s",peerAddress)
+	log.Infof("peerServerInit listen tcp == %s", peerAddress)
 	lis, err := net.Listen("tcp", peerAddress)
 	if err != nil {
 		return err
 	}
 	ccStartupTimeout := cfg.GetConfig().ContractDeploytimeout
 	if ccStartupTimeout <= 0 {
-		ccStartupTimeout = time.Duration(40) * time.Second
+		ccStartupTimeout = time.Duration(180) * time.Second
 	}
 	ca, err := accesscontrol.NewCA()
 	if err != nil {
@@ -177,7 +174,7 @@ func peerServerInit(jury core.IAdapterJury) error {
 
 func peerServerDeInit() error {
 	grpcServer.Stop()
-	defer os.RemoveAll(cfg.GetConfig().ContractFileSystemPath)
+	//defer os.RemoveAll(cfg.GetConfig().ContractFileSystemPath)
 	return nil
 }
 
@@ -195,21 +192,19 @@ func systemContractDeInit() error {
 	return nil
 }
 
-func packChaincode(chainID string, ccName string, ccPath string, ccVersion string, args [][]byte) error {
-
-	return nil
-}
-
-func recoverChaincodeFromeDb() error {
-
-	return nil
-}
-
-func createDeployId(templateName string) string {
-	t := time.Now()
-	h := md5.New()
-	io.WriteString(h, templateName)
-	io.WriteString(h, t.String())
-	id := fmt.Sprintf("%x", h.Sum(nil))
-	return id
+//in = contractId1:v1;contractId2:v2;contractId3:v3
+func getContractSysVersion(contractId []byte, in string) string { //contractId []byte
+	adr := cm.NewAddress(contractId, cm.ContractHash)
+	cvs := strings.Split(in, ";")
+	log.Debugf("cvs len[%d]:%v, adr:%s", len(cvs), cvs, adr.String())
+	for _, ls := range cvs {
+		cv := strings.Split(ls, ":")
+		if len(cv) > 1 {
+			if adr.String() == cv[0] {
+				log.Debugf("getContractSysVersion ok, version:%s", cv[1])
+				return cv[1]
+			}
+		}
+	}
+	return ""
 }

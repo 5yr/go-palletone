@@ -21,21 +21,15 @@
 package web3ext
 
 var Modules = map[string]string{
-	"admin":      Admin_JS,
-	"chequebook": Chequebook_JS,
-	"clique":     Clique_JS,
-	"debug":      Debug_JS,
-	"ptn":        Ptn_JS,
-	"dag":        Dag_JS,
-	"net":        Net_JS,
-	"personal":   Personal_JS,
-	"rpc":        RPC_JS,
-	"wallet":     Wallet_JS,
-	"txpool":     TxPool_JS,
-	"mediator":   Mediator_JS,
+	//"checkbook": Checkbook_JS,
+	//"clique":     Clique_JS,
+	//"net":        Net_JS,
+	//"rpc":        RPC_JS,
+	"txpool": TxPool_JS,
 }
 
-const Chequebook_JS = `
+/*
+const Checkbook_JS = `
 web3._extend({
 	property: 'chequebook',
 	methods: [
@@ -137,6 +131,7 @@ web3._extend({
 	]
 });
 `
+*/
 
 const TxPool_JS = `
 web3._extend({
@@ -165,6 +160,10 @@ web3._extend({
 		new web3._extend.Property({
 			name: 'pending',
 			getter: 'txpool_pending'
+		}),
+		new web3._extend.Property({
+			name: 'queue',
+			getter: 'txpool_queue'
 		}),
 	]
 });

@@ -26,7 +26,6 @@ import (
 	"golang.org/x/net/context"
 
 	"github.com/palletone/go-palletone/common/log"
-	cfg "github.com/palletone/go-palletone/contracts/contractcfg"
 	cclist "github.com/palletone/go-palletone/contracts/list"
 	"github.com/palletone/go-palletone/contracts/shim"
 	"github.com/palletone/go-palletone/core/vmContractPub/ccprovider"
@@ -75,7 +74,8 @@ type SystemChaincode struct {
 
 // registerSysCC registers the given system chaincode with the peer
 func registerSysCC(syscc *SystemChaincode) (bool, error) {
-	if !syscc.Enabled || isWhitelisted(syscc) {
+	//if !syscc.Enabled || isWhitelisted(syscc) {
+	if !syscc.Enabled {
 		log.Info(fmt.Sprintf("system chaincode (%s,%s,%t) disabled", syscc.Name, syscc.Path, syscc.Enabled))
 		return false, nil
 	}
@@ -96,7 +96,8 @@ func registerSysCC(syscc *SystemChaincode) (bool, error) {
 
 // deploySysCC deploys the given system chaincode on a chain
 func deploySysCC(chainID string, syscc *SystemChaincode) error {
-	if !syscc.Enabled || isWhitelisted(syscc) {
+	//if !syscc.Enabled || isWhitelisted(syscc) {
+	if !syscc.Enabled {
 		log.Info(fmt.Sprintf("system chaincode (%s,%s) disabled", syscc.Name, syscc.Path))
 		return nil
 	}
@@ -123,19 +124,19 @@ func deploySysCC(chainID string, syscc *SystemChaincode) error {
 			defer txsim.Done()
 		}
 	*/
-	chaincodeID := &pb.ChaincodeID{Path: syscc.Path, Name: syscc.Name}
+	chaincodeID := &pb.ChaincodeID{Path: syscc.Path, Name: syscc.Name, Version: syscc.Version}
 	spec := &pb.ChaincodeSpec{Type: pb.ChaincodeSpec_Type(pb.ChaincodeSpec_Type_value["GOLANG"]), ChaincodeId: chaincodeID, Input: &pb.ChaincodeInput{Args: syscc.InitArgs}}
 
 	// First build and get the deployment spec
-	chaincodeDeploymentSpec, err := buildSysCC(ctxt, spec)
+	chaincodeDeploymentSpec := buildSysCC(spec)
 
-	if err != nil {
-		log.Error(fmt.Sprintf("Error deploying chaincode spec: %v\n\n error: %s", spec, err))
-		return err
-	}
+	//if err != nil {
+	//	log.Error(fmt.Sprintf("Error deploying chaincode spec: %v\n\n error: %s", spec, err))
+	//	return err
+	//}
 	log.Infof("buildSysCC chaincodeDeploymentSpec =%v", chaincodeDeploymentSpec)
-	version := util.GetSysCCVersion()
-	cccid := ccprov.GetCCContext(syscc.Id, chainID, chaincodeDeploymentSpec.ChaincodeSpec.ChaincodeId.Name, version, txid, true, nil, nil)
+	//version := util.GetSysCCVersion()
+	cccid := ccprov.GetCCContext(syscc.Id, chainID, chaincodeDeploymentSpec.ChaincodeSpec.ChaincodeId.Name, chaincodeDeploymentSpec.ChaincodeSpec.ChaincodeId.Version, txid, true, nil, nil)
 
 	_, _, err = ccprov.ExecuteWithErrorFilter(ctxt, cccid, chaincodeDeploymentSpec, 0)
 
@@ -143,12 +144,14 @@ func deploySysCC(chainID string, syscc *SystemChaincode) error {
 		log.Errorf("ExecuteWithErrorFilter with syscc.Name[%s] chainId[%s] err !!", syscc.Name, chainID)
 	} else {
 		log.Info("system chaincode deployed ok!!")
-		log.Infof("contract name[%s],path[%s]", syscc.Name, syscc.Path)
+		log.Infof("contract name[%s],path[%s],version[%s]", syscc.Name, syscc.Path, syscc.Version)
 		cc := &cclist.CCInfo{
-			Id:      syscc.Id,
-			Name:    syscc.Name,
-			Path:    syscc.Path,
-			Version: syscc.Version,
+			Id:       syscc.Id,
+			Name:     syscc.Name,
+			Path:     syscc.Path,
+			Version:  syscc.Version,
+			SysCC:    true,
+			Language: "go",
 		}
 		err = cclist.SetChaincode(chainID, 0, cc)
 		if err != nil {
@@ -160,42 +163,42 @@ func deploySysCC(chainID string, syscc *SystemChaincode) error {
 }
 
 // DeDeploySysCC stops the system chaincode and deregisters it from inproccontroller
-func DeDeploySysCC(chainID string, syscc *SystemChaincode) error {
-	chaincodeID := &pb.ChaincodeID{Path: syscc.Path, Name: syscc.Name}
+func DeDeploySysCC(chainID string, syscc *SystemChaincode, dontRmCon bool) error {
+	chaincodeID := &pb.ChaincodeID{Path: syscc.Path, Name: syscc.Name, Version: syscc.Version}
 	spec := &pb.ChaincodeSpec{Type: pb.ChaincodeSpec_Type(pb.ChaincodeSpec_Type_value["GOLANG"]), ChaincodeId: chaincodeID, Input: &pb.ChaincodeInput{Args: syscc.InitArgs}}
 	ctx := context.Background()
 	// First build and get the deployment spec
-	chaincodeDeploymentSpec, err := buildSysCC(ctx, spec)
-	if err != nil {
-		log.Error(fmt.Sprintf("Error deploying chaincode spec: %v\n\n error: %s", spec, err))
-		return err
-	}
+	chaincodeDeploymentSpec := buildSysCC(spec)
+	//if err != nil {
+	//	log.Error(fmt.Sprintf("Error deploying chaincode spec: %v\n\n error: %s", spec, err))
+	//	return err
+	//}
 
 	ccprov := ccprovider.GetChaincodeProvider()
 	version := util.GetSysCCVersion()
 	cccid := ccprov.GetCCContext(syscc.Id, chainID, syscc.Name, version, "123", true, nil, nil)
-	err = ccprov.Stop(ctx, cccid, chaincodeDeploymentSpec)
+	err := ccprov.Stop(ctx, cccid, chaincodeDeploymentSpec, dontRmCon)
 	if err == nil {
-		cclist.DelChaincode(chainID, syscc.Name, version)
+		cclist.DelChaincode(chainID, syscc.Name, syscc.Version)
 	}
 
 	return err
 }
 
 // buildLocal builds a given chaincode code
-func buildSysCC(context context.Context, spec *pb.ChaincodeSpec) (*pb.ChaincodeDeploymentSpec, error) {
+func buildSysCC(spec *pb.ChaincodeSpec) *pb.ChaincodeDeploymentSpec {
 	var codePackageBytes []byte
 	chaincodeDeploymentSpec := &pb.ChaincodeDeploymentSpec{ExecEnv: pb.ChaincodeDeploymentSpec_SYSTEM, ChaincodeSpec: spec, CodePackage: codePackageBytes}
-	return chaincodeDeploymentSpec, nil
+	return chaincodeDeploymentSpec
 }
 
-func isWhitelisted(syscc *SystemChaincode) bool {
-	//chaincodes := viper.GetStringMapString("chaincode.system")
-	chaincodes := cfg.GetConfig().SysContract
-	val, ok := chaincodes[syscc.Name]
-	disabled := val == "disable" || val == "false" || val == "no"
-	return ok && disabled
-}
+//func isWhitelisted(syscc *SystemChaincode) bool {
+//	//chaincodes := viper.GetStringMapString("chaincode.system")
+//	chaincodes := cfg.GetConfig().SysContract
+//	val, ok := chaincodes[syscc.Name]
+//	disabled := val == "disable" || val == "false" || val == "no"
+//	return ok && disabled
+//}
 
 //RegisterSysCCs is the hook for system chaincodes where system chaincodes are registered
 //note the chaincode must still be deployed and launched like a user chaincode will be

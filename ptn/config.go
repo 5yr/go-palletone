@@ -17,16 +17,9 @@
 package ptn
 
 import (
-	"math/big"
-	"os"
-	"os/user"
-
 	//"path/filepath"
 	//"runtime"
 	"time"
-
-	"github.com/palletone/go-palletone/common/hexutil"
-	"github.com/palletone/go-palletone/configure"
 
 	//"github.com/palletone/go-palletone/consensus/consensusconfig"
 	"github.com/palletone/go-palletone/consensus/jury"
@@ -43,11 +36,12 @@ var DefaultConfig = Config{
 	SyncMode:      downloader.FastSync,
 	NetworkId:     1,
 	LightServ:     10,
-	LightPeers:    10,
+	LightPeers:    25,
+	CorsPeers:     0,
 	DatabaseCache: 768,
 	TrieCache:     256,
 	TrieTimeout:   5 * time.Minute,
-	GasPrice:      big.NewInt(0.01 * configure.PalletOne),
+	CryptoLib:     []byte{0, 0},
 
 	TxPool:         txspool.DefaultTxPoolConfig,
 	Dag:            dagconfig.DagConfig,
@@ -57,12 +51,12 @@ var DefaultConfig = Config{
 }
 
 func init() {
-	home := os.Getenv("HOME")
-	if home == "" {
-		if user, err := user.Current(); err == nil {
-			home = user.HomeDir
-		}
-	}
+	//home := os.Getenv("HOME")
+	//if home == "" {
+	//	if user, err := user.Current(); err == nil {
+	//		home = user.HomeDir
+	//	}
+	//}
 	/*would recover
 	if runtime.GOOS == "windows" {
 		DefaultConfig.Ethash.DatasetDir = filepath.Join(home, "AppData", "Ethash")
@@ -87,6 +81,10 @@ type Config struct {
 	LightServ  int `toml:",omitempty"` // Maximum percentage of time allowed for serving LES requests
 	LightPeers int `toml:",omitempty"` // Maximum number of LES client peers
 
+	// Cors client options
+	//CorsServ  int `toml:",omitempty"` // Maximum percentage of time allowed for serving LES requests
+	CorsPeers int `toml:",omitempty"` // Maximum number of LES client peers
+
 	// Database options
 	SkipBcVersionCheck bool `toml:"-"`
 	DatabaseHandles    int  `toml:"-"`
@@ -98,7 +96,7 @@ type Config struct {
 	//Etherbase    common.Address `toml:",omitempty"`
 	MinerThreads int    `toml:",omitempty"`
 	ExtraData    []byte `toml:",omitempty"`
-	GasPrice     *big.Int
+	CryptoLib    []byte
 
 	// Transaction pool options
 	TxPool txspool.TxPoolConfig `toml:"-"`
@@ -125,8 +123,4 @@ type Config struct {
 
 	//must be equal to the node.GasToken
 	//TokenSubProtocol string `toml:"-"`
-}
-
-type configMarshaling struct {
-	ExtraData hexutil.Bytes
 }

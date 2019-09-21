@@ -20,17 +20,19 @@
 package storage
 
 import (
-	"github.com/palletone/go-palletone/common"
-	"github.com/palletone/go-palletone/common/ptndb"
+	"encoding/json"
+
 	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/palletone/go-palletone/common"
+	"github.com/palletone/go-palletone/common/log"
+	"github.com/palletone/go-palletone/common/ptndb"
 	"github.com/palletone/go-palletone/common/util"
 	"github.com/palletone/go-palletone/dag/constants"
 	"github.com/palletone/go-palletone/dag/errors"
-	"github.com/palletone/go-palletone/dag/modules"
 	"github.com/syndtr/goleveldb/leveldb/iterator"
 )
 
-const missingNumber = uint64(0xffffffffffffffff)
+//const missingNumber = uint64(0xffffffffffffffff)
 
 // DatabaseReader wraps the Get method of a backing data store.
 type DatabaseReader interface {
@@ -39,8 +41,7 @@ type DatabaseReader interface {
 	NewIteratorWithPrefix(prefix []byte) iterator.Iterator
 }
 
-// @author Albert·Gou
-func retrieve(db ptndb.Database, key []byte, v interface{}) error {
+func RetrieveFromRlpBytes(db ptndb.Database, key []byte, v interface{}) error {
 	data, err := db.Get(key)
 	if err != nil {
 		return err
@@ -53,26 +54,23 @@ func retrieve(db ptndb.Database, key []byte, v interface{}) error {
 
 	return nil
 }
-func retrieveWithVersion(db ptndb.Database, key []byte) ([]byte, *modules.StateVersion, error) {
+
+func RetrieveFromJsonBytes(db ptndb.Database, key []byte, v interface{}) error {
 	data, err := db.Get(key)
 	if err != nil {
-		return nil, nil, err
+		log.Debugf("DB Get err: %v", err.Error())
+		return err
 	}
-	return splitValueAndVersion(data)
-}
 
-//将Statedb里的Value分割为Version和用户数据
-func splitValueAndVersion(data []byte) ([]byte, *modules.StateVersion, error) {
-	if len(data) <= 29 {
-		return nil, nil, errors.New("the data is irregular.")
+	//log.Debugf("RetrieveFromJsonBytes, key: %v, value: %v", string(key), string(data))
+
+	err = json.Unmarshal(data, v)
+	if err != nil {
+		log.Debugf("json Unmarshal err: %v", err.Error())
+		return err
 	}
-	verBytes := data[:29]
-	objData := data[29:]
-	c_data := make([]byte, 0)
-	err := rlp.DecodeBytes(objData, &c_data)
-	version := &modules.StateVersion{}
-	version.SetBytes(verBytes)
-	return c_data, version, err
+
+	return nil
 }
 
 // get string
@@ -96,14 +94,14 @@ func getprefix(db DatabaseReader, prefix []byte) map[string][]byte {
 }
 
 // get row count by prefix
-func getCountByPrefix(db DatabaseReader, prefix []byte) int {
-	iter := db.NewIteratorWithPrefix(prefix)
-	count := 0
-	for iter.Next() {
-		count++
-	}
-	return count
-}
+//func getCountByPrefix(db DatabaseReader, prefix []byte) int {
+//	iter := db.NewIteratorWithPrefix(prefix)
+//	count := 0
+//	for iter.Next() {
+//		count++
+//	}
+//	return count
+//}
 func GetContractRlp(db DatabaseReader, id common.Hash) (rlp.RawValue, error) {
 	if common.EmptyHash(id) {
 		return nil, errors.New("the filed not defined")
@@ -117,7 +115,7 @@ func GetContractRlp(db DatabaseReader, id common.Hash) (rlp.RawValue, error) {
 
 // GetAdddrTransactionsHash
 func GetAddrTransactionsHash(db DatabaseReader, addr string) ([]common.Hash, error) {
-	data, err := db.Get(append(constants.AddrTransactionsHash_Prefix, []byte(addr)...))
+	data, err := db.Get(append(constants.ADDR_TXID_PREFIX, []byte(addr)...))
 	if err != nil {
 		return []common.Hash{}, err
 	}

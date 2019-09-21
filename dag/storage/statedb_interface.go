@@ -27,33 +27,31 @@ import (
 )
 
 type IStateDb interface {
-	GetConfig(name string) ([]byte, *modules.StateVersion, error)
 	GetPrefix(prefix []byte) map[string][]byte
-	//SaveConfig(confs []modules.ContractWriteSet, stateVersion *modules.StateVersion) error
-	//SaveAssetInfo(assetInfo *modules.AssetInfo) error
-	//GetAssetInfo(assetId *modules.Asset) (*modules.AssetInfo, error)
 	SaveContract(contract *modules.Contract) error
-	SaveContractState(id []byte, name string, value interface{}, version *modules.StateVersion) error
+	GetContract(id []byte) (*modules.Contract, error)
+	GetAllContracts() ([]*modules.Contract, error)
+	SaveContractState(id []byte, w *modules.ContractWriteSet, version *modules.StateVersion) error
 	SaveContractStates(id []byte, wset []modules.ContractWriteSet, version *modules.StateVersion) error
-	SaveContractTemplate(templateId []byte, bytecode []byte, version []byte) error
-	SaveContractTemplateState(id []byte, name string, value interface{}, version *modules.StateVersion) error
+	GetContractState(id []byte, field string) ([]byte, *modules.StateVersion, error)
+	GetContractStatesByPrefix(id []byte, prefix string) (map[string]*modules.ContractStateValue, error)
+	GetContractStatesById(id []byte) (map[string]*modules.ContractStateValue, error)
+
+	UpdateStateByContractInvoke(invoke *modules.ContractInvokeRequestPayload) error
+
+	SaveContractTpl(tpl *modules.ContractTemplate) error
+	SaveContractTplCode(tplId []byte, byteCode []byte) error
+	GetContractTpl(tplId []byte) (*modules.ContractTemplate, error)
+	GetContractTplCode(tplId []byte) ([]byte, error)
+	GetAllContractTpl() ([]*modules.ContractTemplate, error)
+	GetContractIdsByTpl(tplId []byte) ([][]byte, error)
 	SaveContractDeploy(reqid []byte, deploy *modules.ContractDeployPayload) error
 	SaveContractDeployReq(reqid []byte, deploy *modules.ContractDeployRequestPayload) error
-	SaveContractInvoke(reqid []byte, invoke *modules.ContractInvokePayload) error
 	SaveContractInvokeReq(reqid []byte, invoke *modules.ContractInvokeRequestPayload) error
 	SaveContractStop(reqid []byte, stop *modules.ContractStopPayload) error
 	SaveContractStopReq(reqid []byte, stopr *modules.ContractStopRequestPayload) error
 	SaveContractSignature(reqid []byte, sig *modules.SignaturePayload) error
 
-	DeleteState(key []byte) error
-	GetContractTpl(templateID []byte) (version *modules.StateVersion, bytecode []byte, name string, path string, tplVersion string)
-	GetContractState(id []byte, field string) ([]byte, *modules.StateVersion, error)
-	GetTplAllState(id []byte) []*modules.ContractReadSet
-	//GetContractAllState() []*modules.ContractReadSet
-	GetContractStatesByPrefix(id []byte, prefix string) (map[string]*modules.ContractStateValue, error)
-	GetContractStatesById(id []byte) (map[string]*modules.ContractStateValue, error)
-	GetTplState(id []byte, field string) (*modules.StateVersion, []byte)
-	GetContract(id []byte) (*modules.Contract, error)
 	GetContractDeploy(reqId []byte) (*modules.ContractDeployPayload, error)
 	GetContractDeployReq(reqid []byte) (*modules.ContractDeployRequestPayload, error)
 	GetContractInvoke(reqId []byte) (*modules.ContractInvokePayload, error)
@@ -61,36 +59,47 @@ type IStateDb interface {
 	GetContractStop(reqId []byte) (*modules.ContractStopPayload, error)
 	GetContractStopReq(reqId []byte) (*modules.ContractStopRequestPayload, error)
 	GetContractSignature(reqId []byte) (*modules.SignaturePayload, error)
-	/* Account_Info */
-	RetrieveAccountInfo(address common.Address) (*modules.AccountInfo, error)
-	StoreAccountInfo(address common.Address, info *modules.AccountInfo) error
+
+	SaveAccountState(address common.Address, write *modules.AccountStateWriteSet, version *modules.StateVersion) error
+	SaveAccountStates(address common.Address, writeset []modules.AccountStateWriteSet, version *modules.StateVersion) error
+	GetAllAccountStates(address common.Address) (map[string]*modules.ContractStateValue, error)
+	GetAccountState(address common.Address, statekey string) (*modules.ContractStateValue, error)
 	UpdateAccountBalance(addr common.Address, addAmount int64) error
 	GetAccountBalance(address common.Address) uint64
-	GetMinFee() (*modules.AmountAsset, error)
+	GetAccountVotedMediators(addr common.Address) map[string]bool
+	LookupAccount() map[common.Address]*modules.AccountInfo
 
+	GetMinFee() (*modules.AmountAsset, error)
+	//获得一个合约的陪审团列表
+	GetContractJury(contractId []byte) (*modules.ElectionNode, error)
+	SaveContractJury(contractId []byte, jury modules.ElectionNode, version *modules.StateVersion) error
 	// world state chainIndex
-	//GetCurrentChainIndex(assetId modules.AssetId) (*modules.ChainIndex, error)
-	//保存当前最新单元的高度，即使是未稳定的单元，也会更新
-	//SaveChainIndex(index *modules.ChainIndex) error
-	//GetCurrentUnit(assetId modules.AssetId) *modules.Unit
 
 	StoreMediator(med *core.Mediator) error
 	StoreMediatorInfo(add common.Address, mi *modules.MediatorInfo) error
 	RetrieveMediator(address common.Address) (*core.Mediator, error)
-	GetMediatorCount() int
-
 	GetMediators() map[common.Address]bool
-	LookupMediator() map[common.Address]*core.Mediator
-
-	GetApprovedMediatorList() ([]*modules.MediatorRegisterInfo, error)
-	IsApprovedMediator(address common.Address) bool
+	LookupMediatorInfo() []*modules.MediatorInfo
 	IsMediator(address common.Address) bool
-	LookupAccount() map[common.Address]*modules.AccountInfo
 	RetrieveMediatorInfo(address common.Address) (*modules.MediatorInfo, error)
-	UpdateAccountInfo(account common.Address, accountUpdateOp *modules.AccountUpdateOperation) error
 
-	GetJuryCandidateList() ([]common.Address, error)
+	GetCandidateMediatorList() (map[string]bool, error)
+	GetJuryCandidateList() (map[string]bool, error)
 	IsInJuryCandidateList(address common.Address) bool
+	GetAllJuror() (map[string]*modules.Juror, error)
+	GetJurorByAddr(addr string) (*modules.Juror, error)
+	GetContractDeveloperList() ([]common.Address, error)
+	IsInContractDeveloperList(address common.Address) bool
 
-	UpdateSysParams(ver *modules.StateVersion) error
+	GetDataVersion() (*modules.DataVersion, error)
+	SaveDataVersion(dv *modules.DataVersion) error
+
+	GetPartitionChains() ([]*modules.PartitionChain, error)
+	GetMainChain() (*modules.MainChain, error)
+
+	GetBlacklistAddress() ([]common.Address, *modules.StateVersion, error)
+
+	GetSysParamWithoutVote() (map[string]string, error)
+	GetSysParamsWithVotes() (*modules.SysTokenIDInfo, error)
+	SaveSysConfigContract(key string, val []byte, ver *modules.StateVersion) error
 }

@@ -20,19 +20,14 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/palletone/go-palletone/common"
 	"github.com/palletone/go-palletone/common/log"
 	"github.com/palletone/go-palletone/configure"
+
 	"github.com/palletone/go-palletone/core"
 	"github.com/palletone/go-palletone/core/accounts"
 	"github.com/palletone/go-palletone/core/accounts/keystore"
-
-	//asset2 "github.com/palletone/go-palletone/dag/asset"
 	dagCommon "github.com/palletone/go-palletone/dag/common"
-
-	"crypto/ecdsa"
-	"github.com/palletone/go-palletone/common/crypto"
 	"github.com/palletone/go-palletone/dag/errors"
 	"github.com/palletone/go-palletone/dag/modules"
 	"github.com/palletone/go-palletone/tokenengine"
@@ -137,10 +132,11 @@ func GetGensisTransctions(ks *keystore.KeyStore, genesis *core.Genesis) (modules
 	//}
 	// generate p2pkh bytes
 	addr, _ := common.StringToAddress(holder.String())
-	pkscript := tokenengine.GenerateP2PKHLockScript(addr.Bytes())
+	pkscript := tokenengine.Instance.GenerateP2PKHLockScript(addr.Bytes())
 	asset, _ := modules.StringToAsset(genesis.GasToken)
 	txout := &modules.Output{
-		Value:    genesis.GetTokenAmount(),
+		Value: genesis.GetTokenAmount(),
+		//Value:    genesis.TokenAmount,
 		Asset:    asset,
 		PkScript: pkscript,
 	}
@@ -174,10 +170,19 @@ func GetGensisTransctions(ks *keystore.KeyStore, genesis *core.Genesis) (modules
 		}
 		tx.TxMessages = append(tx.TxMessages, newMsg)
 	}
-
-	// step4, generate inital mediator info payload
-	initialMediatorMsgs := dagCommon.GetInitialMediatorMsgs(genesis)
-	tx.TxMessages = append(tx.TxMessages, initialMediatorMsgs...)
+	//Init system contract
+	for _, sc := range genesis.SystemContracts {
+		newMsg := &modules.Message{
+			App:     modules.APP_CONTRACT_DEPLOY,
+			Payload: &modules.ContractDeployPayload{ContractId: sc.Address.Bytes(), Name: sc.Name},
+		}
+		if sc.Active {
+			tx.TxMessages = append(tx.TxMessages, newMsg)
+		}
+	}
+	// step4, generate initial mediator info payload
+	//initialMediatorMsgs := dagCommon.GetInitialMediatorMsgs(genesis)
+	//tx.TxMessages = append(tx.TxMessages, initialMediatorMsgs...)
 
 	// tx.CreationDate = tx.CreateDate()
 	//tx.TxHash = tx.Hash()
@@ -186,13 +191,13 @@ func GetGensisTransctions(ks *keystore.KeyStore, genesis *core.Genesis) (modules
 	return txs, asset
 }
 
-func sigData(key *ecdsa.PrivateKey, data interface{}) ([]byte, error) {
-	txBytes, _ := rlp.EncodeToBytes(data)
-	hash := crypto.Keccak256(txBytes)
-	sign, err := crypto.Sign(hash, key)
-
-	return sign[0:64], err
-}
+//func sigData(key *ecdsa.PrivateKey, data interface{}) ([]byte, error) {
+//	txBytes, _ := rlp.EncodeToBytes(data)
+//	hash := crypto.Keccak256(txBytes)
+//	sign, err := crypto.Sign(hash, key)
+//
+//	return sign, err
+//}
 
 func GenContractTransction(orgTx *modules.Transaction, msgs []*modules.Message) (*modules.Transaction, error) {
 	if orgTx == nil || len(orgTx.TxMessages) < 2 {
@@ -205,7 +210,8 @@ func GenContractTransction(orgTx *modules.Transaction, msgs []*modules.Message) 
 	for i := 0; i < len(msgs); i++ {
 		tx.AddMessage(msgs[i])
 	}
-
+	tx.CertId = orgTx.CertId
+	tx.Illegal = orgTx.Illegal
 	return tx, nil
 }
 
@@ -222,92 +228,100 @@ func GenContractTransction(orgTx *modules.Transaction, msgs []*modules.Message) 
 
 // DefaultGenesisBlock returns the PalletOne main net genesis block.
 func DefaultGenesisBlock() *core.Genesis {
-	SystemConfig := core.SystemConfig{
-		DepositRate:               core.DefaultDepositRate,
-		FoundationAddress:         core.DefaultFoundationAddress,
-		DepositAmountForMediator:  core.DefaultDepositAmountForMediator,
-		DepositAmountForJury:      core.DefaultDepositAmountForJury,
-		DepositAmountForDeveloper: core.DefaultDepositAmountForDeveloper,
-		DepositPeriod:             core.DefaultDepositPeriod,
-		UccMemory:core.DefaultUccMemory,
-		UccMemorySwap:core.DefaultUccMemorySwap,
-		UccCpuShares:core.DefaultUccCpuShares,
-		UccCpuPeriod:core.DefaultCpuPeriod,
-		UccCpuQuota:core.DefaultUccCpuQuota,
-		UccCpuSetCpus:core.DefaultUccCpuSetCpus,
-		TempUccMemory:core.DefaultTempUccMemory,
-		TempUccMemorySwap:core.DefaultTempUccMemorySwap,
-		TempUccCpuShares:core.DefaultTempUccCpuShares,
-		TempUccCpuQuota:core.DefaultTempUccCpuQuota,
-	}
+	//SystemConfig := core.SystemConfig{
+	//	DepositRate:               core.DefaultDepositRate,
+	//	FoundationAddress:         core.DefaultFoundationAddress,
+	//	DepositAmountForMediator:  core.DefaultDepositAmountForMediator,
+	//	DepositAmountForJury:      core.DefaultDepositAmountForJury,
+	//	DepositAmountForDeveloper: core.DefaultDepositAmountForDeveloper,
+	//	DepositPeriod:             core.DefaultDepositPeriod,
+	//	UccMemory:                 core.DefaultUccMemory,
+	//	UccMemorySwap:             core.DefaultUccMemorySwap,
+	//	UccCpuShares:              core.DefaultUccCpuShares,
+	//	UccCpuPeriod:              core.DefaultCpuPeriod,
+	//	UccCpuQuota:               core.DefaultUccCpuQuota,
+	//	UccCpuSetCpus:             core.DefaultUccCpuSetCpus,
+	//	TempUccMemory:             core.DefaultTempUccMemory,
+	//	TempUccMemorySwap:         core.DefaultTempUccMemorySwap,
+	//	TempUccCpuShares:          core.DefaultTempUccCpuShares,
+	//	TempUccCpuQuota:           core.DefaultTempUccCpuQuota,
+	//	ContractSignatureNum:      core.DefaultContractSignatureNum,
+	//	ContractElectionNum:       core.DefaultContractElectionNum,
+	//	ActiveMediatorCount:       strconv.FormatUint(core.DefaultMediatorCount, 10),
+	//}
 
-	DigitalIdentityConfig := core.DigitalIdentityConfig{
-		// default root ca holder, 默认是基金会地址
-		RootCAHolder: core.DefaultFoundationAddress,
-		RootCABytes:  core.DefaultRootCABytes,
-	}
+	//DigitalIdentityConfig := core.DigitalIdentityConfig{
+	//	// default root ca holder, 默认是基金会地址
+	//	RootCAHolder: core.DefaultFoundationAddress,
+	//	RootCABytes:  core.DefaultRootCABytes,
+	//}
+
 	initParams := core.NewChainParams()
 
 	return &core.Genesis{
 		Version:     configure.Version,
 		TokenAmount: core.DefaultTokenAmount,
 		//TokenDecimal:           core.DefaultTokenDecimal,
-		ParentUnitHeight:       -1,
-		ChainID:                1,
-		TokenHolder:            core.DefaultTokenHolder,
-		SystemConfig:           SystemConfig,
-		DigitalIdentityConfig:  DigitalIdentityConfig,
-		InitialParameters:      initParams,
-		ImmutableParameters:    core.NewImmutChainParams(),
-		InitialTimestamp:       InitialTimestamp(initParams.MediatorInterval),
-		InitialActiveMediators: core.DefaultMediatorCount,
-		InitialMediatorCandidates: InitialMediatorCandidates(core.DefaultMediatorCount,
+		ParentUnitHeight: -1,
+		ChainID:          1,
+		TokenHolder:      core.DefaultTokenHolder,
+		//SystemConfig:          SystemConfig,
+		DigitalIdentityConfig: core.DefaultDigitalIdentityConfig(),
+		InitialParameters:     initParams,
+		ImmutableParameters:   core.NewImmutChainParams(),
+		InitialTimestamp:      InitialTimestamp(initParams.MediatorInterval),
+		//InitialActiveMediators: core.DefaultMediatorCount,
+		InitialMediatorCandidates: InitialMediatorCandidates(core.DefaultActiveMediatorCount,
 			core.DefaultMediator),
 	}
 }
 
 // DefaultTestnetGenesisBlock returns the Ropsten network genesis block.
 func DefaultTestnetGenesisBlock() *core.Genesis {
-	SystemConfig := core.SystemConfig{
-		DepositRate:               core.DefaultDepositRate,
-		FoundationAddress:         core.DefaultFoundationAddress,
-		DepositAmountForJury:      core.DefaultDepositAmountForJury,
-		DepositAmountForMediator:  core.DefaultDepositAmountForMediator,
-		DepositAmountForDeveloper: core.DefaultDepositAmountForDeveloper,
-		DepositPeriod:             core.DefaultDepositPeriod,
-		UccMemory:core.DefaultUccMemory,
-		UccMemorySwap:core.DefaultUccMemorySwap,
-		UccCpuShares:core.DefaultUccCpuShares,
-		UccCpuPeriod:core.DefaultCpuPeriod,
-		UccCpuQuota:core.DefaultUccCpuQuota,
-		UccCpuSetCpus:core.DefaultUccCpuSetCpus,
-		TempUccMemory:core.DefaultTempUccMemory,
-		TempUccMemorySwap:core.DefaultTempUccMemorySwap,
-		TempUccCpuShares:core.DefaultTempUccCpuShares,
-		TempUccCpuQuota:core.DefaultTempUccCpuQuota,
-	}
+	//SystemConfig := core.SystemConfig{
+	//	DepositRate:               core.DefaultDepositRate,
+	//	FoundationAddress:         core.DefaultFoundationAddress,
+	//	DepositAmountForJury:      core.DefaultDepositAmountForJury,
+	//	DepositAmountForMediator:  core.DefaultDepositAmountForMediator,
+	//	DepositAmountForDeveloper: core.DefaultDepositAmountForDeveloper,
+	//	DepositPeriod:             core.DefaultDepositPeriod,
+	//	UccMemory:                 core.DefaultUccMemory,
+	//	UccMemorySwap:             core.DefaultUccMemorySwap,
+	//	UccCpuShares:              core.DefaultUccCpuShares,
+	//	UccCpuPeriod:              core.DefaultCpuPeriod,
+	//	UccCpuQuota:               core.DefaultUccCpuQuota,
+	//	UccCpuSetCpus:             core.DefaultUccCpuSetCpus,
+	//	TempUccMemory:             core.DefaultTempUccMemory,
+	//	TempUccMemorySwap:         core.DefaultTempUccMemorySwap,
+	//	TempUccCpuShares:          core.DefaultTempUccCpuShares,
+	//	TempUccCpuQuota:           core.DefaultTempUccCpuQuota,
+	//	ContractSignatureNum:      core.DefaultContractSignatureNum,
+	//	ContractElectionNum:       core.DefaultContractElectionNum,
+	//	ActiveMediatorCount:       strconv.FormatUint(core.DefaultMediatorCount, 10),
+	//}
 
-	DigitalIdentityConfig := core.DigitalIdentityConfig{
-		// default root ca holder, 默认是基金会地址
-		RootCAHolder: core.DefaultFoundationAddress,
-		RootCABytes:  core.DefaultRootCABytes,
-	}
+	//DigitalIdentityConfig := core.DigitalIdentityConfig{
+	//	// default root ca holder, 默认是基金会地址
+	//	RootCAHolder: core.DefaultFoundationAddress,
+	//	RootCABytes:  core.DefaultRootCABytes,
+	//}
+
 	initParams := core.NewChainParams()
 
 	return &core.Genesis{
 		Version:     configure.Version,
 		TokenAmount: core.DefaultTokenAmount,
 		//TokenDecimal:           core.DefaultTokenDecimal,
-		ParentUnitHeight:       -1,
-		ChainID:                1,
-		TokenHolder:            core.DefaultTokenHolder,
-		SystemConfig:           SystemConfig,
-		DigitalIdentityConfig:  DigitalIdentityConfig,
-		InitialParameters:      initParams,
-		ImmutableParameters:    core.NewImmutChainParams(),
-		InitialTimestamp:       InitialTimestamp(initParams.MediatorInterval),
-		InitialActiveMediators: core.DefaultMediatorCount,
-		InitialMediatorCandidates: InitialMediatorCandidates(core.DefaultMediatorCount,
+		ParentUnitHeight: -1,
+		ChainID:          1,
+		TokenHolder:      core.DefaultTokenHolder,
+		//SystemConfig:          SystemConfig,
+		DigitalIdentityConfig: core.DefaultDigitalIdentityConfig(),
+		InitialParameters:     initParams,
+		ImmutableParameters:   core.NewImmutChainParams(),
+		InitialTimestamp:      InitialTimestamp(initParams.MediatorInterval),
+		//InitialActiveMediators: core.DefaultMediatorCount,
+		InitialMediatorCandidates: InitialMediatorCandidates(core.DefaultActiveMediatorCount,
 			core.DefaultMediator),
 	}
 }
@@ -317,6 +331,7 @@ func InitialMediatorCandidates(len int, address string) []*core.InitialMediator 
 	for i := 0; i < len; i++ {
 		im := core.NewInitialMediator()
 		im.AddStr = address
+		im.RewardAdd = address
 		im.InitPubKey = core.DefaultInitPubKey
 		im.Node = deFaultNode
 		initialMediator[i] = im

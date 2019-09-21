@@ -5,8 +5,10 @@ import (
 	"time"
 )
 
-const sysParam = "sysParam"
-const sysParams = "sysParams"
+const (
+	UpdateSysParamWithoutVote = "updateSysParamWithoutVote"
+	CreateVotesTokens         = "createVotesTokens"
+)
 
 //one topic
 type SysVoteTopic struct {

@@ -21,89 +21,24 @@
 package dag
 
 import (
-	"fmt"
+	"encoding/json"
 	"time"
 
-	"github.com/dedis/kyber/sign/bls"
 	"github.com/palletone/go-palletone/common"
+	"github.com/palletone/go-palletone/common/event"
 	"github.com/palletone/go-palletone/common/hexutil"
 	"github.com/palletone/go-palletone/common/log"
+	"github.com/palletone/go-palletone/contracts/syscontract"
 	"github.com/palletone/go-palletone/core"
-	"github.com/palletone/go-palletone/dag/dagconfig"
 	"github.com/palletone/go-palletone/dag/modules"
+	"github.com/palletone/go-palletone/dag/storage"
+	"go.dedis.ch/kyber/v3/sign/bls"
 )
 
-func (dag *Dag) validateUnit(unit *modules.Unit) error {
-	author := unit.Author()
-	if !dag.IsActiveMediator(author) && !dag.IsPrecedingMediator(author) {
-		errStr := fmt.Sprintf("The author(%v) of unit(%v) is not mediator!",
-			author.Str(), unit.UnitHash.TerminalString())
-		log.Debugf(errStr)
-
-		return fmt.Errorf(errStr)
-	}
-
-	err := dag.validate.ValidateUnitExceptGroupSig(unit)
-	if err != nil {
-		return err
-	}
-
-	return nil
+func (d *Dag) SubscribeToGroupSignEvent(ch chan<- modules.ToGroupSignEvent) event.Subscription {
+	return d.Memdag.SubscribeToGroupSignEvent(ch)
 }
 
-func (dag *Dag) validateUnitHeader(nextUnit *modules.Unit) bool {
-	pHash := nextUnit.ParentHash()[0]
-	headHash, idx, _ := dag.propRep.GetNewestUnit(nextUnit.Number().AssetID)
-	if pHash != headHash {
-		// todo 出现分叉, 调用本方法之前未处理分叉
-		log.Debugf("unit(%v) on the forked chain: parentHash(%v) not equal headUnitHash(%v)",
-			nextUnit.UnitHash.TerminalString(), pHash.TerminalString(), headHash.TerminalString())
-		return false
-	}
-
-	if idx.Index+1 != nextUnit.NumberU64() {
-		log.Debugf("invalidated unit(%v)'s height number!, last height:%d, next unit height:%d",
-			nextUnit.UnitHash.TerminalString(), idx.Index, nextUnit.NumberU64())
-		return false
-	}
-
-	return true
-}
-
-func (dag *Dag) validateMediatorSchedule(nextUnit *modules.Unit) bool {
-	gasToken := dagconfig.DagConfig.GetGasToken()
-	ts, _ := dag.propRep.GetNewestUnitTimestamp(gasToken)
-	if ts >= nextUnit.Timestamp() {
-		log.Debug("invalidated unit's timestamp!")
-		return false
-	}
-
-	slotNum := dag.GetSlotAtTime(time.Unix(nextUnit.Timestamp(), 0))
-	if slotNum <= 0 {
-		log.Debug("invalidated unit's slot!")
-		return false
-	}
-
-	scheduledMediator := dag.GetScheduledMediator(slotNum)
-	if !scheduledMediator.Equal(nextUnit.Author()) {
-		log.Debug("mediator(%v) produced unit at wrong time!", nextUnit.Author().Str())
-		return false
-	}
-
-	return true
-}
-
-func (d *Dag) Close() {
-	d.activeMediatorsUpdatedScope.Close()
-}
-
-// @author Albert·Gou
-func (d *Dag) ValidateUnitExceptGroupSig(unit *modules.Unit) error {
-	unitState := d.validate.ValidateUnitExceptGroupSig(unit)
-	return unitState
-}
-
-// author Albert·Gou
 func (d *Dag) IsActiveMediator(add common.Address) bool {
 	return d.GetGlobalProp().IsActiveMediator(add)
 }
@@ -116,22 +51,104 @@ func (dag *Dag) InitPropertyDB(genesis *core.Genesis, unit *modules.Unit) error 
 	//  全局属性不是交易，不需要放在Unit中
 	// @author Albert·Gou
 	gp := modules.InitGlobalProp(genesis)
-	if err := dag.propRep.StoreGlobalProp(gp); err != nil {
+	if err := dag.stablePropRep.StoreGlobalProp(gp); err != nil {
 		return err
 	}
 
 	//  动态全局属性不是交易，不需要放在Unit中
 	// @author Albert·Gou
 	dgp := modules.InitDynGlobalProp(unit)
-	if err := dag.propRep.StoreDynGlobalProp(dgp); err != nil {
+	if err := dag.stablePropRep.StoreDynGlobalProp(dgp); err != nil {
 		return err
 	}
-	//dag.propRep.SetNewestUnit(unit.Header())
+	//dag.stablePropRep.SetNewestUnit(unit.Header())
 
 	//  初始化mediator调度器，并存在数据库
 	// @author Albert·Gou
 	ms := modules.InitMediatorSchl(gp, dgp)
-	if err := dag.propRep.StoreMediatorSchl(ms); err != nil {
+	if err := dag.stablePropRep.StoreMediatorSchl(ms); err != nil {
+		return err
+	}
+	dag.stablePropRep.UpdateMediatorSchedule()
+
+	return nil
+}
+
+func (dag *Dag) InitStateDB(genesis *core.Genesis, unit *modules.Unit) error {
+	version := &modules.StateVersion{
+		Height:  unit.Number(),
+		TxIndex: ^uint32(0),
+	}
+	ws := &modules.ContractWriteSet{
+		IsDelete: false,
+		//Key:      modules.MediatorList,
+		//Value: imcB,
+	}
+
+	// Create initial mediators
+	list := make(map[string]bool, len(genesis.InitialMediatorCandidates))
+
+	for _, imc := range genesis.InitialMediatorCandidates {
+		// 存储 mediator info
+		addr, err := imc.Validate()
+		if err != nil {
+			log.Debugf(err.Error())
+			return err
+		}
+
+		mi := modules.NewMediatorInfo()
+		mi.MediatorInfoBase = imc.MediatorInfoBase
+		//*mi.MediatorApplyInfo = *imc.MediatorApplyInfo
+
+		err = dag.stableStateRep.StoreMediatorInfo(addr, mi)
+		if err != nil {
+			log.Debugf(err.Error())
+			return err
+		}
+
+		// 将保证金设为0
+		md := modules.NewMediatorDeposit()
+		md.Status = modules.Agree
+		md.Role = modules.Mediator
+		md.ApplyEnterTime = time.Unix(unit.Timestamp(), 0).UTC().Format(modules.Layout2)
+
+		byte, err := json.Marshal(md)
+		if err != nil {
+			return err
+		}
+
+		ws.Value = byte
+		ws.Key = storage.MediatorDepositKey(imc.AddStr)
+		err = dag.stableStateRep.SaveContractState(syscontract.DepositContractAddress.Bytes(), ws, version)
+		if err != nil {
+			log.Debugf(err.Error())
+			return err
+		}
+
+		list[mi.AddStr] = true
+	}
+
+	// 存储 initMediatorCandidates/JuryCandidates
+	imcB, err := json.Marshal(list)
+	if err != nil {
+		log.Debugf(err.Error())
+		return err
+	}
+	ws.Value = imcB
+
+	//Mediator
+	ws.Key = modules.MediatorList
+	err = dag.stableStateRep.SaveContractState(syscontract.DepositContractAddress.Bytes(), ws, version)
+	if err != nil {
+		log.Debugf(err.Error())
+		return err
+	}
+
+	//Jury
+	ws.Key = modules.JuryList
+	err = dag.stableStateRep.SaveContractState(syscontract.DepositContractAddress.Bytes(), ws, version)
+	if err != nil {
+		log.Debugf(err.Error())
 		return err
 	}
 
@@ -139,19 +156,19 @@ func (dag *Dag) InitPropertyDB(genesis *core.Genesis, unit *modules.Unit) error 
 }
 
 func (dag *Dag) IsSynced() bool {
-	gp := dag.GetGlobalProp()
-	dgp := dag.GetDynGlobalProp()
+	//gp := dag.GetGlobalProp()
+	//dgp := dag.GetDynGlobalProp()
 
 	//nowFine := time.Now()
 	//now := time.Unix(nowFine.Add(500*time.Millisecond).Unix(), 0)
 	now := time.Now()
-	nextSlotTime := dag.propRep.GetSlotTime(gp, dgp, 1)
+	// 防止误判，获取之后的第2个生产槽时间
+	//nextSlotTime := dag.unstablePropRep.GetSlotTime(gp, dgp, 1)
+	//nextSlotTime := dag.unstablePropRep.GetSlotTime(2)
+	_, _, _, rep, _ := dag.Memdag.GetUnstableRepositories()
+	nextSlotTime := rep.GetSlotTime(2)
 
-	if nextSlotTime.Before(now) {
-		return false
-	}
-
-	return true
+	return nextSlotTime.After(now)
 }
 
 // author Albert·Gou
@@ -165,54 +182,62 @@ func (d *Dag) PrecedingThreshold() int {
 
 func (d *Dag) UnitIrreversibleTime() time.Duration {
 	gp := d.GetGlobalProp()
-	it := uint(gp.ChainThreshold()) * uint(gp.ChainParameters.MediatorInterval)
+	cp := gp.ChainParameters
+	it := uint(gp.ChainThreshold()+int(cp.MaintenanceSkipSlots)) * uint(cp.MediatorInterval)
 	return time.Duration(it) * time.Second
 }
 
 func (d *Dag) IsIrreversibleUnit(hash common.Hash) bool {
-	unit, err := d.GetUnitByHash(hash)
-	if unit != nil && err == nil {
-		_, idx, _ := d.propRep.GetLastStableUnit(unit.UnitHeader.Number.AssetID)
-
-		if unit.NumberU64() <= idx.Index {
-			return true
+	header, err := d.unstableUnitRep.GetHeaderByHash(hash)
+	if err != nil {
+		//return false // 存在于memdag，不稳定
+		header, err = d.stableUnitRep.GetHeaderByHash(hash)
+		if err != nil {
+			log.Debugf("UnitRep GetHeaderByHash error:%s", err.Error())
+			return false // 不存在该unit
 		}
 	}
 
-	return false
+	if header.NumberU64() > d.GetIrreversibleUnitNum(header.GetAssetId()) {
+		return false
+	}
+
+	return true
 }
 
-func (d *Dag) GetIrreversibleUnit(id modules.AssetId) (*modules.ChainIndex, error) {
-	_, idx, err := d.propRep.GetLastStableUnit(id)
-	return idx, err
+func (d *Dag) GetIrreversibleUnitNum(id modules.AssetId) uint64 {
+	_, idx, err := d.stablePropRep.GetNewestUnit(id)
+	if err != nil {
+		log.Debugf("stableUnitRep GetNewestUnit error:%s", err.Error())
+		return 0
+	}
+
+	return idx.Index
 }
 
 func (d *Dag) VerifyUnitGroupSign(unitHash common.Hash, groupSign []byte) error {
-	unit, err := d.GetUnitByHash(unitHash)
+	header, err := d.GetHeaderByHash(unitHash)
 	if err != nil {
 		log.Debug(err.Error())
 		return err
 	}
 
-	pubKey, err := unit.GroupPubKey()
+	pubKey, err := header.GetGroupPubKey()
 	if err != nil {
 		log.Debug(err.Error())
 		return err
 	}
 
 	err = bls.Verify(core.Suite, pubKey, unitHash[:], groupSign)
-	if err == nil {
-		//log.Debug("the group signature: " + hexutil.Encode(groupSign) +
-		//	" of the Unit that hash: " + unitHash.Hex() + " is verified through!")
-	} else {
+	if err != nil {
 		log.Debug("the group signature: " + hexutil.Encode(groupSign) + " of the Unit that hash: " +
 			unitHash.Hex() + " is verified that an error has occurred: " + err.Error())
 		return err
 	}
-
 	return nil
 }
 
+// 判断该mediator是下一个产块mediator
 func (dag *Dag) IsConsecutiveMediator(nextMediator common.Address) bool {
 	dgp := dag.GetDynGlobalProp()
 

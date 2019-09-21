@@ -17,14 +17,14 @@
 package ptn
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"sync/atomic"
-
+	"github.com/coocood/freecache"
 	"github.com/palletone/go-palletone/common"
 	"github.com/palletone/go-palletone/common/event"
 	"github.com/palletone/go-palletone/common/log"
@@ -35,12 +35,22 @@ import (
 	mp "github.com/palletone/go-palletone/consensus/mediatorplugin"
 	"github.com/palletone/go-palletone/core"
 	"github.com/palletone/go-palletone/dag"
+	"github.com/palletone/go-palletone/dag/palletcache"
+
+	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/fsouza/go-dockerclient"
+	"github.com/palletone/go-palletone/common/crypto"
+	util2 "github.com/palletone/go-palletone/common/util"
+	"github.com/palletone/go-palletone/contracts/comm"
+	"github.com/palletone/go-palletone/contracts/contractcfg"
+	"github.com/palletone/go-palletone/contracts/manger"
+	"github.com/palletone/go-palletone/contracts/utils"
 	dagerrors "github.com/palletone/go-palletone/dag/errors"
 	"github.com/palletone/go-palletone/dag/modules"
 	"github.com/palletone/go-palletone/ptn/downloader"
 	"github.com/palletone/go-palletone/ptn/fetcher"
-	//"github.com/palletone/go-palletone/ptn/lps"
 	"github.com/palletone/go-palletone/validator"
+	"github.com/palletone/go-palletone/vm/common"
 )
 
 const (
@@ -50,10 +60,6 @@ const (
 	// txChanSize is the size of channel listening to TxPreEvent.
 	// The number is referenced from the size of tx pool.
 	txChanSize = 4096
-)
-
-var (
-	daoChallengeTimeout = 15 * time.Second // Time allowance for a node to reply to the DAO handshake challenge
 )
 
 // errIncompatibleConfig is returned if the requested protocols and configs are
@@ -70,10 +76,10 @@ type ProtocolManager struct {
 	networkId uint64
 	srvr      *p2p.Server
 	//protocolName string
-	mainAssetId modules.AssetId
-
-	fastSync  uint32 // Flag whether fast sync is enabled (gets disabled if we already have blocks)
-	acceptTxs uint32 // Flag whether we're considered synchronised (enables transaction processing)
+	mainAssetId   modules.AssetId
+	receivedCache palletcache.ICache
+	fastSync      uint32 // Flag whether fast sync is enabled (gets disabled if we already have blocks)
+	acceptTxs     uint32 // Flag whether we're considered synchronized (enables transaction processing)
 
 	lightSync uint32 //Flag whether light sync is enabled
 
@@ -97,10 +103,11 @@ type ProtocolManager struct {
 	dag dag.IDag
 
 	// channels for fetcher, syncer, txsyncLoop
-	newPeerCh   chan *peer
-	txsyncCh    chan *txsync
-	quitSync    chan struct{}
-	noMorePeers chan struct{}
+	newPeerCh      chan *peer
+	txsyncCh       chan *txsync
+	quitSync       chan struct{}
+	dockerQuitSync chan struct{}
+	noMorePeers    chan struct{}
 
 	//consensus test for p2p
 	consEngine core.ConsensusEngine
@@ -139,8 +146,11 @@ type ProtocolManager struct {
 
 	genesis *modules.Unit
 
-	activeMediatorsUpdatedCh  chan dag.ActiveMediatorsUpdatedEvent
+	activeMediatorsUpdatedCh  chan modules.ActiveMediatorsUpdatedEvent
 	activeMediatorsUpdatedSub event.Subscription
+
+	toGroupSignCh  chan modules.ToGroupSignEvent
+	toGroupSignSub event.Subscription
 }
 
 // NewProtocolManager returns a new PalletOne sub protocol manager. The PalletOne sub protocol manages peers capable
@@ -158,18 +168,21 @@ func NewProtocolManager(mode downloader.SyncMode, networkId uint64, gasToken mod
 		consEngine: engine,
 		peers:      newPeerSet(),
 		//lightPeers:   newPeerSet(),
-		newPeerCh:    make(chan *peer),
-		noMorePeers:  make(chan struct{}),
-		txsyncCh:     make(chan *txsync),
-		quitSync:     make(chan struct{}),
-		genesis:      genesis,
-		producer:     producer,
-		contractProc: contractProc,
-		lightSync:    uint32(1),
+		newPeerCh:      make(chan *peer),
+		noMorePeers:    make(chan struct{}),
+		txsyncCh:       make(chan *txsync),
+		quitSync:       make(chan struct{}),
+		dockerQuitSync: make(chan struct{}),
+		genesis:        genesis,
+		producer:       producer,
+		contractProc:   contractProc,
+		lightSync:      uint32(1),
+		receivedCache:  freecache.NewCache(5 * 1024 * 1024),
 	}
 	symbol, _, _, _, _ := gasToken.ParseAssetId()
 	protocolName := symbol
-	//asset, err := modules.NewAsset(strings.ToUpper(gasToken), modules.AssetType_FungibleToken, 8, []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, modules.UniqueIdType_Null, modules.UniqueId{})
+	//asset, err := modules.NewAsset(strings.ToUpper(gasToken), modules.AssetType_FungibleToken,
+	// 8, []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, modules.UniqueIdType_Null, modules.UniqueId{})
 	//if err != nil {
 	//	log.Error("ProtocolManager new asset err", err)
 	//	return nil, err
@@ -195,7 +208,7 @@ func NewProtocolManager(mode downloader.SyncMode, networkId uint64, gasToken mod
 		if mode == downloader.FastSync && version < ptn1 {
 			continue
 		}
-		// Compatible; initialise the sub-protocol
+		// Compatible; initialize the sub-protocol
 		version := version // Closure for the run
 		manager.SubProtocols = append(manager.SubProtocols, p2p.Protocol{
 			Name:    protocolName,
@@ -221,22 +234,13 @@ func NewProtocolManager(mode downloader.SyncMode, networkId uint64, gasToken mod
 				}
 				return nil
 			},
-			//Corss: func() []string {
-			//	return manager.Corss()
-			//},
-			//CorsPeerInfo: func(protocl string, id discover.NodeID) interface{} {
-			//	if p := manager.lightPeers.Peer(id.TerminalString()); p != nil {
-			//		return p.Info(protocl)
-			//	}
-			//	return nil
-			//},
 		})
 	}
 	if len(manager.SubProtocols) == 0 {
 		return nil, errIncompatibleConfig
 	}
 
-	// Construct the different synchronisation mechanisms
+	// Construct the different synchronization mechanisms
 	manager.downloader = downloader.New(mode, manager.eventMux, manager.removePeer, nil, dag, txpool)
 	manager.fetcher = manager.newFetcher()
 
@@ -244,20 +248,29 @@ func NewProtocolManager(mode downloader.SyncMode, networkId uint64, gasToken mod
 	//manager.lightFetcher = manager.newLightFetcher()
 	return manager, nil
 }
+func (pm *ProtocolManager) IsExistInCache(id []byte) bool {
+	_, err := pm.receivedCache.Get(id)
+	if err != nil { //Not exist, add it!
+		pm.receivedCache.Set(id, nil, 60*5)
+	}
+	return err == nil
+}
 
 func (pm *ProtocolManager) newFetcher() *fetcher.Fetcher {
 	validatorFn := func(unit *modules.Unit) error {
 		//return dagerrors.ErrFutureBlock
 		hash := unit.Hash()
-		log.Debugf("Importing propagated block insert DAG Enter ValidateUnitExceptGroupSig, unit: %s", hash.String())
-		defer log.Debugf("Importing propagated block insert DAG End ValidateUnitExceptGroupSig, unit: %s", hash.String())
-		verr := pm.dag.ValidateUnitExceptGroupSig(unit)
+		verr := validator.ValidateUnitBasic(unit)
 		if verr != nil && !validator.IsOrphanError(verr) {
-			return dagerrors.ErrFutureBlock
+			return verr
 		}
-		return nil
+		log.Debugf("Importing propagated block insert DAG End ValidateUnitExceptGroupSig, unit: %s,validated: %v",
+			hash.String(), verr)
+		return dagerrors.ErrFutureBlock
 	}
 	heighter := func(assetId modules.AssetId) uint64 {
+		log.Debug("Enter PalletOne Fetcher heighter")
+		defer log.Debug("End PalletOne Fetcher heighter")
 		unit := pm.dag.GetCurrentUnit(assetId)
 		if unit != nil {
 			return unit.NumberU64()
@@ -280,10 +293,22 @@ func (pm *ProtocolManager) newFetcher() *fetcher.Fetcher {
 			if pm.dag.IsHeaderExist(hash) {
 				continue
 			}
-			pm.txpool.SetPendingTxs(hash, u.Transactions())
+			pm.txpool.SetPendingTxs(hash, u.NumberU64(), u.Transactions())
 		}
 
-		return pm.dag.InsertDag(blocks, pm.txpool)
+		account, err := pm.dag.InsertDag(blocks, pm.txpool, false)
+		if err == nil {
+			go func() {
+				var (
+					events = make([]interface{}, 0, 2)
+				)
+				events = append(events, modules.ChainHeadEvent{Unit: blocks[0]})
+				events = append(events, modules.ChainEvent{Unit: blocks[0], Hash: blocks[0].UnitHash})
+				pm.dag.PostChainEvents(events)
+			}()
+		}
+		return account, err
+
 	}
 	return fetcher.New(pm.dag.IsHeaderExist, validatorFn, pm.BroadcastUnit, heighter, inserter, pm.removePeer)
 }
@@ -303,19 +328,17 @@ func (pm *ProtocolManager) removePeer(id string) {
 		log.Error("Peer removal failed", "peer", id, "err", err)
 	}
 	// Hard disconnect at the networking layer
-	if peer != nil {
-		peer.Peer.Disconnect(p2p.DiscUselessPeer)
-	}
+	peer.Peer.Disconnect(p2p.DiscUselessPeer)
 }
 
-func (pm *ProtocolManager) Start(srvr *p2p.Server, maxPeers int) {
+func (pm *ProtocolManager) Start(srvr *p2p.Server, maxPeers int, syncCh chan bool) {
 	pm.srvr = srvr
 	pm.maxPeers = maxPeers
 
 	// start sync handlers
 	//定时与相邻个体进行全链的强制同步,syncer()首先启动fetcher成员，然后进入一个无限循环，
 	//每次循环中都会向相邻peer列表中“最优”的那个peer作一次区块全链同步
-	go pm.syncer()
+	go pm.syncer(syncCh)
 
 	//txsyncLoop负责把pending的交易发送给新建立的连接。
 	//txsyncLoop负责每个新连接的初始事务同步。
@@ -368,14 +391,73 @@ func (pm *ProtocolManager) Start(srvr *p2p.Server, maxPeers int) {
 		pm.contractSub = pm.contractProc.SubscribeContractEvent(pm.contractCh)
 	}
 
-	pm.activeMediatorsUpdatedCh = make(chan dag.ActiveMediatorsUpdatedEvent)
+	pm.activeMediatorsUpdatedCh = make(chan modules.ActiveMediatorsUpdatedEvent)
 	pm.activeMediatorsUpdatedSub = pm.dag.SubscribeActiveMediatorsUpdatedEvent(pm.activeMediatorsUpdatedCh)
 	go pm.activeMediatorsUpdatedEventRecvLoop()
+
+	pm.toGroupSignCh = make(chan modules.ToGroupSignEvent)
+	pm.toGroupSignSub = pm.dag.SubscribeToGroupSignEvent(pm.toGroupSignCh)
+	go pm.toGroupSignEventRecvLoop()
 
 	if pm.consEngine != nil {
 		pm.ceCh = make(chan core.ConsensusEvent, txChanSize)
 		pm.ceSub = pm.consEngine.SubscribeCeEvent(pm.ceCh)
 		go pm.ceBroadcastLoop()
+	}
+	//  是否为linux系統
+	if runtime.GOOS == "linux" {
+		//创建 docker client
+		client, err := util.NewDockerClient()
+		if err != nil {
+			log.Error("util.NewDockerClient", "error", err)
+			return
+		}
+		//创建gptn-net网络
+		_, err = client.NetworkInfo(core.DefaultUccNetworkMode)
+		if err != nil {
+			log.Debugf("client.NetworkInfo error: %s", err.Error())
+			_, err := client.CreateNetwork(docker.CreateNetworkOptions{Name: core.DefaultUccNetworkMode, Driver: "bridge"})
+			if err != nil {
+				log.Debugf("client.CreateNetwork error: %s", err.Error())
+				return
+			}
+		}
+		//拉取gptn发布版本对应的goimg基础镜像，防止卡住
+		go func() {
+			goimg := contractcfg.Goimg + ":" + contractcfg.GptnVersion
+			_, err = client.InspectImage(goimg)
+			if err != nil {
+				log.Debugf("Image %s does not exist locally, attempt pull", goimg)
+				err = client.PullImage(docker.PullImageOptions{Repository: contractcfg.Goimg, Tag: contractcfg.GptnVersion}, docker.AuthConfiguration{})
+				if err != nil {
+					log.Debugf("Failed to pull %s: %s", goimg, err)
+				}
+			}
+			//  获取本地列表，迁移服务器的重启容器，容器不存在且不过期
+			dag, err := comm.GetCcDagHand()
+			if err != nil {
+				log.Debugf("get contract dag error %s", err.Error())
+				return
+			}
+			ccs, err := manger.GetChaincodes(dag)
+			if err != nil {
+				log.Debugf("get chaincodes error %s", err.Error())
+				return
+			}
+			//启动退出的容器，包括本地有的和本地没有的
+			for _, c := range ccs {
+				//conName := c.Name+c.Version+":"+contractcfg.GetConfig().ContractAddress
+				rd, _ := crypto.GetRandomBytes(32)
+				txid := util2.RlpHash(rd)
+				//  启动gptn时启动Jury对应的没有过期的用户合约容器
+				if !c.IsExpired {
+					manger.RestartContainer(dag, "palletone", c.Id, txid.String())
+				}
+			}
+		}()
+
+		go pm.dockerLoop(client)
+
 	}
 }
 
@@ -388,6 +470,7 @@ func (pm *ProtocolManager) Stop() {
 	pm.vssDealSub.Unsubscribe()
 	pm.vssResponseSub.Unsubscribe()
 	pm.activeMediatorsUpdatedSub.Unsubscribe()
+	pm.toGroupSignSub.Unsubscribe()
 	pm.contractSub.Unsubscribe()
 	pm.txSub.Unsubscribe() // quits txBroadcastLoop
 	//pm.ceSub.Unsubscribe()
@@ -411,6 +494,9 @@ func (pm *ProtocolManager) Stop() {
 	// Wait for all peer handler goroutines and the loops to come down.
 	pm.wg.Wait()
 
+	//stop dockerLoop
+	//pm.dockerQuitSync <- struct{}{}
+	close(pm.dockerQuitSync)
 	log.Info("PalletOne protocol stopped")
 }
 
@@ -434,23 +520,27 @@ func (pm *ProtocolManager) handle(p *peer) error {
 func (pm *ProtocolManager) LocalHandle(p *peer) error {
 	// Ignore maxPeers if this is a trusted peer
 	if pm.peers.Len() >= pm.maxPeers && !p.Peer.Info().Network.Trusted {
-		log.Info("ProtocolManager", "handler DiscTooManyPeers:", p2p.DiscTooManyPeers)
+		log.Debug("ProtocolManager", "handler DiscTooManyPeers:", p2p.DiscTooManyPeers,
+			"pm.peers.Len()", pm.peers.Len(), "peers", pm.peers.GetPeers())
 		return p2p.DiscTooManyPeers
 	}
-	log.Debug("PalletOne peer connected", "name", p.Name())
+	log.Debug("PalletOne peer connected", "name", p.id, "p Trusted:", p.Peer.Info().Network.Trusted)
 	// @分区后需要用token获取
 	//head := pm.dag.CurrentHeader(pm.mainAssetId)
 	var (
 		number = &modules.ChainIndex{}
 		hash   = common.Hash{}
+		stable = &modules.ChainIndex{}
 	)
 	if head := pm.dag.CurrentHeader(pm.mainAssetId); head != nil {
 		number = head.Number
 		hash = head.Hash()
+		stable = pm.dag.GetStableChainIndex(pm.mainAssetId)
 	}
 
+	log.Debug("ProtocolManager LocalHandle pre Handshake", "index", number.Index, "stable", stable)
 	// Execute the PalletOne handshake
-	if err := p.Handshake(pm.networkId, number, pm.genesis.Hash(), hash); err != nil {
+	if err := p.Handshake(pm.networkId, number, pm.genesis.Hash(), hash, stable); err != nil {
 		log.Debug("PalletOne handshake failed", "err", err)
 		return err
 	}
@@ -471,18 +561,14 @@ func (pm *ProtocolManager) LocalHandle(p *peer) error {
 		return err
 	}
 
-	//if err := pm.lightdownloader.RegisterLightPeer(p.id, p.version, p); err != nil {
-	//	return err
-	//}
-
 	// Propagate existing transactions. new transactions appearing
 	// after this will be sent via broadcasts.
-	pm.syncTransactions(p)
+	//pm.syncTransactions(p)
 
 	// main loop. handle incoming messages.
 	for {
 		if err := pm.handleMsg(p); err != nil {
-			log.Debug("PalletOne message handling failed", "err", err)
+			log.Debug("PalletOne message handling failed", "err", err, "p.id", p.id)
 			return err
 		}
 	}
@@ -501,20 +587,6 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 	}
 
 	defer msg.Discard()
-
-	//SubProtocols compare
-	//if len(p.Caps()) > 0 {
-	//	partition := pm.SubProtocols[0].Name == p.Caps()[0].Name
-	//	//if !partition && (msg.Code != GetBlockHeadersMsg || msg.Code != BlockHeadersMsg) {
-	//	if !partition && msg.Code != GetBlockHeadersMsg {
-	//		log.Debug("ProtocolManager handleMsg SubProtocols partition compare")
-	//		return nil
-	//	}
-	//	if !partition && msg.Code != BlockHeadersMsg {
-	//		log.Debug("ProtocolManager handleMsg SubProtocols partition compare")
-	//		return nil
-	//	}
-	//}
 
 	// Handle the message depending on its contents
 	switch {
@@ -559,19 +631,16 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 		return pm.TxMsg(msg, p)
 
 		// append by Albert·Gou
-	case msg.Code == NewProducedUnitMsg:
-		// Retrieve and decode the propagated new produced unit
-		return pm.NewProducedUnitMsg(msg, p)
-
-		// append by Albert·Gou
 	case msg.Code == SigShareMsg:
 		return pm.SigShareMsg(msg, p)
 
-		//21*21 resp
+		// 21*21 deal => 21*20 dealMsg
 		// append by Albert·Gou
 	case msg.Code == VSSDealMsg:
 		return pm.VSSDealMsg(msg, p)
 
+		// 21*21 deal => 21*21 resp
+		// 21*21 resp => 21*21*20 respMsg
 		// append by Albert·Gou
 	case msg.Code == VSSResponseMsg:
 		return pm.VSSResponseMsg(msg, p)
@@ -594,8 +663,6 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 	default:
 		return errResp(ErrInvalidMsgCode, "%v", msg.Code)
 	}
-
-	return nil
 }
 
 // BroadcastTx will propagate a transaction to all peers which are not known to
@@ -610,22 +677,21 @@ func (pm *ProtocolManager) BroadcastTx(hash common.Hash, tx *modules.Transaction
 	log.Trace("Broadcast transaction", "hash", hash, "recipients", len(peers))
 }
 
-func (self *ProtocolManager) txBroadcastLoop() {
+func (pm *ProtocolManager) txBroadcastLoop() {
 	for {
 		select {
-		case event := <-self.txCh:
-			log.Debug("=====ProtocolManager=====", "txBroadcastLoop event.Tx", event.Tx)
-			self.BroadcastTx(event.Tx.Hash(), event.Tx)
+		case event := <-pm.txCh:
+			pm.BroadcastTx(event.Tx.Hash(), event.Tx)
 
 			// Err() channel will be closed when unsubscribing.
-		case <-self.txSub.Err():
+		case <-pm.txSub.Err():
 			return
 		}
 	}
 }
 
 func (pm *ProtocolManager) ContractReqLocalSend(event jury.ContractEvent) {
-	log.Info("ContractReqLocalSend", "event", event.Tx.Hash())
+	log.Debug("ContractReqLocalSend", "event", event.Tx.Hash())
 	pm.contractCh <- event
 }
 
@@ -633,33 +699,33 @@ func (pm *ProtocolManager) ContractReqLocalSend(event jury.ContractEvent) {
 // will only announce it's availability (depending what's requested).
 func (pm *ProtocolManager) BroadcastUnit(unit *modules.Unit, propagate bool) {
 	hash := unit.Hash()
-
-	for _, parentHash := range unit.ParentHash() {
-		if parent, err := pm.dag.GetUnitByHash(parentHash); err != nil || parent == nil {
-			log.Error("Propagating dangling block", "index", unit.Number().Index, "hash", hash, "parent_hash", parentHash.String())
-			return
-		}
-	}
-
-	data, err := json.Marshal(unit)
-	if err != nil {
-		log.Error("ProtocolManager", "BroadcastUnit json marshal err:", err)
-		return
-	}
-
 	// If propagation is requested, send to a subset of the peer
+	data, err := rlp.EncodeToBytes(unit)
+	if err != nil {
+		log.Errorf("BroadcastUnit rlp encode err:%s", err.Error())
+	}
+
 	peers := pm.peers.PeersWithoutUnit(hash)
 	for _, peer := range peers {
 		peer.SendNewRawUnit(unit, data)
 	}
-	log.Trace("BroadcastUnit Propagated block", "index:", unit.Header().Number.Index, "hash", hash, "recipients", len(peers), "duration", common.PrettyDuration(time.Since(unit.ReceivedAt)))
+	log.Trace("BroadcastUnit Propagated block", "index:", unit.Header().Number.Index,
+		"hash", hash, "recipients", len(peers), "duration", common.PrettyDuration(time.Since(unit.ReceivedAt)))
 }
 
-func (pm *ProtocolManager) ElectionBroadcast(event jury.ElectionEvent) {
-	//log.Debug("ElectionBroadcast", "event num", event.Event.(jury.ElectionRequestEvent), "data", event.Event.(jury.ElectionRequestEvent).Data)
+func (pm *ProtocolManager) ElectionBroadcast(event jury.ElectionEvent, local bool) {
+	//log.Debug("ElectionBroadcast", "event num", event.Event.(jury.ElectionRequestEvent),
+	// "data", event.Event.(jury.ElectionRequestEvent).Data)
 	peers := pm.peers.GetPeers()
+
 	for _, peer := range peers {
-		peer.SendElectionEvent(event)
+		err := peer.SendElectionEvent(event)
+		if err != nil {
+			log.Debug("ElectionBroadcast", "err", err)
+		}
+	}
+	if local {
+		go pm.contractProc.ProcessElectionEvent(&event)
 	}
 }
 
@@ -671,18 +737,21 @@ func (pm *ProtocolManager) AdapterBroadcast(event jury.AdapterEvent) {
 }
 
 func (pm *ProtocolManager) ContractBroadcast(event jury.ContractEvent, local bool) {
-	//peers := pm.peers.PeersWithoutUnit(event.Tx.TxHash)
+	reqId := event.Tx.RequestHash()
 	peers := pm.peers.GetPeers()
-	log.Debug("ContractBroadcast", "event type", event.CType, "reqId", event.Tx.RequestHash().String(), "peers num", len(peers))
-
+	log.Debugf("[%s]ContractBroadcast, event type[%d], peers num[%d]", reqId.String()[0:8], event.CType, len(peers))
 	for _, peer := range peers {
 		if err := peer.SendContractTransaction(event); err != nil {
-			log.Error("ProtocolManager ContractBroadcast", "SendContractTransaction err:", err.Error())
+			log.Error("ContractBroadcast", "SendContractTransaction err:", err.Error())
 		}
 	}
-
 	if local {
-		go pm.contractProc.ProcessContractEvent(&event)
+		go func() {
+			err := pm.contractProc.ProcessContractEvent(&event)
+			if err != nil {
+				log.Errorf("[%s]ContractBroadcast, error:%s", reqId.String()[0:8], err.Error())
+			}
+		}()
 	}
 }
 
@@ -696,8 +765,8 @@ type NodeInfo struct {
 }
 
 // NodeInfo retrieves some protocol metadata about the running host node.
-func (self *ProtocolManager) NodeInfo(genesisHash common.Hash) *NodeInfo {
-	unit := self.dag.CurrentUnit(self.mainAssetId)
+func (pm *ProtocolManager) NodeInfo(genesisHash common.Hash) *NodeInfo {
+	unit := pm.dag.GetCurrentUnit(pm.mainAssetId)
 	var (
 		index = uint64(0)
 		hash  = common.Hash{}
@@ -708,7 +777,7 @@ func (self *ProtocolManager) NodeInfo(genesisHash common.Hash) *NodeInfo {
 	}
 
 	return &NodeInfo{
-		Network: self.networkId,
+		Network: pm.networkId,
 		Index:   index,
 		Genesis: genesisHash,
 		Head:    hash,
@@ -722,15 +791,43 @@ func (pm *ProtocolManager) BroadcastCe(ce []byte) {
 		peer.SendConsensus(ce)
 	}
 }
-func (self *ProtocolManager) ceBroadcastLoop() {
+func (pm *ProtocolManager) ceBroadcastLoop() {
 	for {
 		select {
-		case event := <-self.ceCh:
-			self.BroadcastCe(event.Ce)
+		case event := <-pm.ceCh:
+			pm.BroadcastCe(event.Ce)
 
 			// Err() channel will be closed when unsubscribing.
-		case <-self.ceSub.Err():
+		case <-pm.ceSub.Err():
 			return
+		}
+	}
+}
+
+func (pm *ProtocolManager) dockerLoop(client *docker.Client) {
+	log.Debugf("starting docker loop")
+	dag, err := comm.GetCcDagHand()
+	if err != nil {
+		log.Infof("db.GetCcDagHand err: %s", err.Error())
+		return
+	}
+	for {
+		select {
+		case <-pm.dockerQuitSync:
+			log.Infof("quit from docker loop")
+			return
+		case <-time.After(time.Duration(30) * time.Second):
+			log.Debugf("each 30 second to get all containers")
+			//  程序启动过程中的,获取所有的容器
+			//  获取所有容器
+			cons, err := utils.GetAllContainers(client)
+			if err != nil {
+				log.Errorf("utils.GetAllContainers error %s", err.Error())
+			}
+			//  重启退出且不过期容器
+			manger.RestartContainers(client, dag, cons)
+			//  删除过期容器
+			manger.RemoveExpiredConatiners(client, dag, dag.GetChainParameters().RmExpConFromSysParam, cons)
 		}
 	}
 }

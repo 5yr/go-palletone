@@ -21,6 +21,7 @@
 package common
 
 import (
+	"github.com/palletone/go-palletone/tokenengine"
 	"reflect"
 	"testing"
 	"time"
@@ -31,17 +32,18 @@ import (
 	"github.com/palletone/go-palletone/common"
 	"github.com/palletone/go-palletone/common/crypto"
 	"github.com/palletone/go-palletone/common/ptndb"
-	"github.com/palletone/go-palletone/core"
 	"github.com/palletone/go-palletone/dag/modules"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/palletone/go-palletone/common/log"
+	"github.com/palletone/go-palletone/common/util"
+	"github.com/palletone/go-palletone/dag/storage"
 )
 
 func mockUnitRepository() *UnitRepository {
 	db, _ := ptndb.NewMemDatabase()
 	//l := plog.NewTestLog()
-	return NewUnitRepository4Db(db)
+	return NewUnitRepository4Db(db, tokenengine.Instance)
 }
 
 //func mockUnitRepositoryLeveldb(path string) *UnitRepository {
@@ -69,26 +71,26 @@ func TestGenesisUnit(t *testing.T) {
 
 }
 
-func TestGenGenesisConfigPayload(t *testing.T) {
-	var genesisConf core.Genesis
-	genesisConf.SystemConfig.DepositRate = "0.02"
-
-	genesisConf.InitialParameters.MediatorInterval = 10
-
-	payloads, err := GenGenesisConfigPayload(&genesisConf, &modules.Asset{})
-
-	if err != nil {
-		log.Debug("TestGenGenesisConfigPayload", "err", err)
-	}
-	for _, payload := range payloads {
-
-		for _, w := range payload.WriteSet {
-			k := w.Key
-			v := w.Value
-			log.Debug("Key:", k, v)
-		}
-	}
-}
+//func TestGenGenesisConfigPayload(t *testing.T) {
+//	var genesisConf core.Genesis
+//	genesisConf.InitialParameters.DepositRate = "0.02"
+//
+//	genesisConf.InitialParameters.MediatorInterval = 10
+//
+//	payloads, err := GenGenesisConfigPayload(&genesisConf, &modules.Asset{})
+//
+//	if err != nil {
+//		log.Debug("TestGenGenesisConfigPayload", "err", err)
+//	}
+//	for _, payload := range payloads {
+//
+//		for _, w := range payload.WriteSet {
+//			k := w.Key
+//			v := w.Value
+//			log.Debug("Key:", k, v)
+//		}
+//	}
+//}
 
 func TestSaveUnit(t *testing.T) {
 	rep := mockUnitRepository()
@@ -118,8 +120,8 @@ func TestSaveUnit(t *testing.T) {
 
 	header.Authors = *auth
 	contractTplPayload := modules.NewContractTplPayload([]byte("contract_template0000"),
-		"TestContractTpl", "./contract", "1.1.1", 1024,
-		[]byte{175, 52, 23, 180, 156, 109, 17, 232, 166, 226, 84, 225, 173, 184, 229, 159})
+		1024,
+		[]byte{175, 52, 23, 180, 156, 109, 17, 232, 166, 226, 84, 225, 173, 184, 229, 159}, modules.ContractError{})
 	readSet := []modules.ContractReadSet{}
 	readSet = append(readSet, modules.ContractReadSet{Key: "name", Version: &modules.StateVersion{
 		Height:  &modules.ChainIndex{},
@@ -136,11 +138,10 @@ func TestSaveUnit(t *testing.T) {
 		},
 	}
 	deployPayload := modules.NewContractDeployPayload([]byte("contract_template0000"), []byte("contract0000"),
-		"testDeploy", nil, 10, nil, nil, readSet, writeSet)
+		"testDeploy", nil, nil, readSet, writeSet, modules.ContractError{})
 
 	invokePayload := &modules.ContractInvokePayload{
 		ContractId: []byte("contract0000"),
-		Args:       [][]byte{[]byte("initial")},
 		ReadSet:    readSet,
 		WriteSet: []modules.ContractWriteSet{
 			{
@@ -148,10 +149,8 @@ func TestSaveUnit(t *testing.T) {
 				Value: modules.ToPayloadMapValueBytes("Alice"),
 			},
 			{
-				Key: "age",
-				Value: modules.ToPayloadMapValueBytes(modules.DelContractState{
-					IsDelete: true,
-				}),
+				Key:      "age",
+				IsDelete: true,
 			},
 		},
 	}
@@ -352,7 +351,7 @@ func TestPaymentTransactionRLP(t *testing.T) {
 
 	}
 	t.Log("data", tx)
-	assert.Equal(t, tx2, tx)
+	assert.Equal(t, tx2.Hash(), tx.Hash())
 
 }
 
@@ -361,9 +360,9 @@ func TestContractTplPayloadTransactionRLP(t *testing.T) {
 	// TODO test ContractTplPayload
 	contractTplPayload := modules.ContractTplPayload{
 		TemplateId: []byte("contract_template0000"),
-		Bytecode:   []byte{175, 52, 23, 180, 156, 109, 17, 232, 166, 226, 84, 225, 173, 184, 229, 159},
-		Name:       "TestContractTpl",
-		Path:       "./contract",
+		ByteCode:   []byte{175, 52, 23, 180, 156, 109, 17, 232, 166, 226, 84, 225, 173, 184, 229, 159},
+		//Name:       "TestContractTpl",
+		//Path:       "./contract",
 	}
 	readSet := []modules.ContractReadSet{}
 	readSet = append(readSet, modules.ContractReadSet{Key: "name", Version: &modules.StateVersion{
@@ -435,10 +434,9 @@ func TestContractDeployPayloadTransactionRLP(t *testing.T) {
 	addr.SetString("P12EA8oRMJbAtKHbaXGy8MGgzM8AMPYxkN1")
 	//et := time.Duration(12)
 	deployPayload := modules.ContractDeployPayload{
-		TemplateId: []byte("contract_template0000"),
+		//TemplateId: []byte("contract_template0000"),
 		ContractId: []byte("contract0000"),
 		Name:       "testdeploy",
-		Args:       [][]byte{[]byte{1, 2, 3}, []byte{4, 5, 6}},
 		//ExecutionTime: et,
 		//Jury:     []common.Address{addr},
 		ReadSet:  readSet,
@@ -516,71 +514,281 @@ func creatFeeTx(isContractTx bool, pubKey [][]byte, amount uint64, aid modules.A
 	}
 
 	txPTx := &modules.TxPoolTransaction{
-		Tx: &tx,
-		TxFee: &modules.AmountAsset{
-			Amount: amount,
-			Asset: &modules.Asset{
-				AssetId: aid,
-			},
-		},
+		Tx:    &tx,
+		TxFee: make([]*modules.Addition, 0),
 	}
+	txPTx.TxFee = append(txPTx.TxFee, &modules.Addition{
+		Amount: amount,
+		Asset: &modules.Asset{
+			AssetId: aid,
+		}})
 	return txPTx
 }
 
-func TestComputeTxFees(t *testing.T) {
-	m, _ := common.StringToAddress("P1K7JsRvDc5THJe6TrtfdRNxp6ZkNiboy9z")
-	txs := make([]*modules.TxPoolTransaction, 0)
-	pks := make([][]byte, 0)
-	aId := modules.AssetId{}
-	tx := &modules.TxPoolTransaction{}
+//
+//func TestComputeTxFees(t *testing.T) {
+//	m, _ := common.StringToAddress("P1K7JsRvDc5THJe6TrtfdRNxp6ZkNiboy9z")
+//	txs := make([]*modules.TxPoolTransaction, 0)
+//	pks := make([][]byte, 0)
+//	aId := modules.AssetId{}
+//	tx := &modules.TxPoolTransaction{}
+//
+//	//1
+//	pks = [][]byte{
+//		{0x01}, {0x02}, {0x03}, {0x04}, {0x05}}
+//	aId = modules.AssetId{'p', 't', 'n'}
+//	tx = creatFeeTx(true, pks, 10, aId)
+//	txs = append(txs, tx)
+//
+//	//	log.Info("TestComputeTxFees", "txs:", tx)
+//	/*
+//		//2
+//		pks = [][]byte{
+//			{0x01}, {0x02}, {0x03}, {0x04}}
+//		aId = modules.AssetId{'p', 't', 'n'}
+//		tx = creatFeeTx(true, pks, 10, aId)
+//		txs = append(txs, tx)
+//
+//		//3
+//		pks = [][]byte{
+//			{0x05}, {0x06}, {0x07}, {0x08}}
+//		aId = modules.AssetId{'p', 't', 'n'}
+//		tx = creatFeeTx(true, pks, 10, aId)
+//		txs = append(txs, tx)
+//
+//		//4
+//		pks = [][]byte{
+//			{0x01}, {0x02}, {0x03}, {0x04}}
+//		aId = modules.AssetId{'a', 'b', 'c'}
+//		tx = creatFeeTx(true, pks, 10, aId)
+//		txs = append(txs, tx)
+//
+//		//5
+//		pks = [][]byte{
+//			{0x01}, {0x02}, {0x03}, {0x04}}
+//		aId = modules.AssetId{'a', 'b', 'c'}
+//		tx = creatFeeTx(true, pks, 10, aId)
+//		txs = append(txs, tx)
+//	*/
+//	//log.Info("TestComputeTxFees", "txs:", txs)
+//	ads, err := ComputeTxFees(&m, txs)
+//	log.Info("TestComputeTxFees", "txs:", ads)
+//	if err == nil {
+//		outAds := arrangeAdditionFeeList(ads)
+//		log.Debug("TestComputeTxFees", "outAds:", outAds)
+//		rewards := map[common.Address][]modules.AmountAsset{}
+//
+//		for _, ad := range outAds {
+//
+//			reward, ok := rewards[ad.Addr]
+//			if !ok {
+//				reward = []modules.AmountAsset{}
+//			}
+//			reward = addIncome(reward, ad.AmountAsset)
+//			rewards[ad.Addr] = reward
+//			//totalIncome += ad.AmountAsset.Amount
+//		}
+//		coinbase := createCoinbasePaymentMsg(rewards)
+//
+//		log.Debug("TestComputeTxFees", "coinbase", coinbase, "rewards", rewards)
+//
+//	}
+//}
 
-	//1
-	pks = [][]byte{
-		{0x01}, {0x02}, {0x03}, {0x04}, {0x05}}
-	aId = modules.AssetId{'p', 't', 'n'}
-	tx = creatFeeTx(true, pks, 10, aId)
-	txs = append(txs, tx)
+func TestContractStateVrf(t *testing.T) {
+	contractId := []byte("TestContractVrf")
+	eleW := modules.ElectionNode{
+		JuryCount: 0,
+		EleList: []modules.ElectionInf{
+			{
+				Proof: []byte("abc"), PublicKey: []byte("def"),
+			},
+		},
+	}
+	ver := &modules.StateVersion{Height: &modules.ChainIndex{Index: 123}, TxIndex: 1}
+	log.Debug("TestContractStateVrf", "ElectionNode", eleW)
 
-	//	log.Info("TestComputeTxFees", "txs:", tx)
-	/*
-		//2
-		pks = [][]byte{
-			{0x01}, {0x02}, {0x03}, {0x04}}
-		aId = modules.AssetId{'p', 't', 'n'}
-		tx = creatFeeTx(true, pks, 10, aId)
-		txs = append(txs, tx)
+	db, _ := ptndb.NewMemDatabase()
+	statedb := storage.NewStateDb(db)
+	//eleW_bytes, _ := rlp.EncodeToBytes(eleW)
+	//write
+	err := statedb.SaveContractJury(contractId, eleW, ver)
+	assert.Nil(t, err)
 
-		//3
-		pks = [][]byte{
-			{0x05}, {0x06}, {0x07}, {0x08}}
-		aId = modules.AssetId{'p', 't', 'n'}
-		tx = creatFeeTx(true, pks, 10, aId)
-		txs = append(txs, tx)
+	//ws := modules.NewWriteSet("ElectionList", eleW_bytes)
+	//if statedb.SaveContractState(contractId, ws, ver) != nil {
+	//	log.Debug("TestContractStateVrf, SaveContractState fail")
+	//	return
+	//}
 
-		//4
-		pks = [][]byte{
-			{0x01}, {0x02}, {0x03}, {0x04}}
-		aId = modules.AssetId{'a', 'b', 'c'}
-		tx = creatFeeTx(true, pks, 10, aId)
-		txs = append(txs, tx)
+	//read
+	eler, err := statedb.GetContractJury(contractId)
+	assert.Nil(t, err)
+	t.Logf("%v", eler)
+	//eleByte, _, err := statedb.GetContractState(contractId, "ElectionList")
+	//if err != nil {
+	//	log.Debug("TestContractStateVrf, GetContractState fail", "error", err)
+	//	return
+	//}
+	//var eler []modules.ElectionInf
+	//err1 := rlp.DecodeBytes(eleByte, &eler)
+	//log.Infof("%v", err1)
+	//log.Infof("%v", eler)
+}
 
-		//5
-		pks = [][]byte{
-			{0x01}, {0x02}, {0x03}, {0x04}}
-		aId = modules.AssetId{'a', 'b', 'c'}
-		tx = creatFeeTx(true, pks, 10, aId)
-		txs = append(txs, tx)
-	*/
-	//log.Info("TestComputeTxFees", "txs:", txs)
-	ads, err := ComputeTxFees(&m, txs)
-	log.Info("TestComputeTxFees", "txs:", ads)
-	if err == nil {
-		outAds := arrangeAdditionFeeList(ads)
-		log.Debug("TestComputeTxFees", "outAds:", outAds)
-		coinbase, rewards, err := CreateCoinbase(outAds, time.Now())
-		if err == nil {
-			log.Debug("TestComputeTxFees", "coinbase", coinbase, "rewards", rewards)
-		}
+func TestContractRlpEncode(t *testing.T) {
+	ads := []string{"P1QFTh1Xq2JpfTbu9bfaMfWh2sR1nHrMV8z", "P1NHVBFRkooh8HD9SvtvU3bpbeVmuGKPPuF",
+		"P1PpgjUC7Nkxgi5KdKCGx2tMu6F5wfPGrVX", "P1MBXJypFCsQpafDGi9ivEooR8QiYmxq4qw"}
+
+	addrs := make([]common.Hash, 0)
+	for _, s := range ads {
+		a, _ := common.StringToAddress(s)
+		addrs = append(addrs, util.RlpHash(a))
+	}
+	log.Debug("TestContractRlpEncode", "addrHash", addrs)
+
+	addrBytes, err := rlp.EncodeToBytes(addrs)
+	if err != nil {
+		log.Debug("TestContractRlpEncode", "EncodeToBytes err", err)
+		return
+	}
+	log.Debug("TestContractRlpEncode", "EncodeToBytes", addrBytes)
+
+	var addh []common.Hash
+	//addh := make([]common.Hash, 4)
+	err = rlp.DecodeBytes(addrBytes, &addh)
+	if err != nil {
+		log.Debug("TestContractRlpEncode", "DecodeBytes err", err)
+		return
 	}
 
+	log.Debug("TestContractRlpEncode", "addh", addh)
 }
+
+func TestContractTxsIllegal(t *testing.T) {
+	//make tx
+	readSet := []modules.ContractReadSet{}
+	readSet = append(readSet, modules.ContractReadSet{Key: "name", Version: &modules.StateVersion{
+		Height:  &modules.ChainIndex{Index: 123},
+		TxIndex: 1,
+	}})
+	writeSet := []modules.ContractWriteSet{
+		{
+			Key:   "name",
+			Value: []byte("Joe"),
+		},
+		{
+			Key:   "age",
+			Value: modules.ToPayloadMapValueBytes(uint8(10)),
+		},
+	}
+	addr := common.Address{}
+	addr.SetString("PC2EA8oRMJbAtKHbaXGy8MGgzM8AMPYxkN1")
+	deployPayload := &modules.ContractDeployPayload{
+		//TemplateId: []byte("contract_template0000"),
+		ContractId: []byte("contract0000"),
+		Name:       "testDeploy",
+		ReadSet:    readSet,
+		WriteSet:   writeSet,
+	}
+	tx1 := &modules.Transaction{
+		TxMessages: []*modules.Message{
+			{
+				App:     modules.APP_CONTRACT_DEPLOY_REQUEST,
+				Payload: nil,
+			},
+			{
+				App:     modules.APP_CONTRACT_DEPLOY,
+				Payload: deployPayload,
+			},
+		},
+	}
+	txs := make([]*modules.Transaction, 0)
+	txs = append(txs, tx1)
+
+	//dag
+	db, _ := ptndb.NewMemDatabase()
+	statedb := storage.NewStateDb(db)
+
+	//set state
+	ver := &modules.StateVersion{Height: &modules.ChainIndex{Index: 123}, TxIndex: 1}
+	err := statedb.SaveContractState([]byte("contract0000"), &writeSet[0], ver)
+	if err != nil {
+		log.Debug("TestContractTxIllegal", "SaveContractState err", err)
+	}
+
+	//mark
+	markTxsIllegal(statedb, txs)
+}
+func markTxsIllegal(dag storage.IStateDb, txs []*modules.Transaction) {
+	for _, tx := range txs {
+		if !tx.IsContractTx() {
+			continue
+		}
+		if tx.IsSystemContract() {
+			continue
+		}
+		var readSet []modules.ContractReadSet
+		var contractId []byte
+
+		for _, msg := range tx.TxMessages {
+			switch msg.App {
+			case modules.APP_CONTRACT_DEPLOY:
+				payload := msg.Payload.(*modules.ContractDeployPayload)
+				readSet = payload.ReadSet
+				contractId = payload.ContractId
+			case modules.APP_CONTRACT_INVOKE:
+				payload := msg.Payload.(*modules.ContractInvokePayload)
+				readSet = payload.ReadSet
+				contractId = payload.ContractId
+			case modules.APP_CONTRACT_STOP:
+				payload := msg.Payload.(*modules.ContractStopPayload)
+				readSet = payload.ReadSet
+				contractId = payload.ContractId
+			}
+		}
+		valid := checkReadSetValid(dag, contractId, readSet)
+		tx.Illegal = !valid
+	}
+}
+
+// func TestCoinbase(t *testing.T) {
+// 	db, _ := ptndb.NewLDBDatabase("D:\\test\\node1\\palletone\\leveldb", 700, 1024)
+// 	rep := NewUnitRepository4Db(db)
+// 	addr, _ := common.StringToAddress("P19VvSXKfTwE7HwUAVNbJrdUJzCYu9tJCDv")
+// 	txs := readFile()
+// 	t.Logf("Tx Count:%d", len(txs))
+// 	tt := time.Now()
+// 	ads, _ := rep.ComputeTxFeesAllocate(addr, txs)
+// 	outAds := arrangeAdditionFeeList(ads)
+// 	coinbase, rewards, _ := rep.CreateCoinbase(outAds, 6)
+// 	t.Logf("create coinbase tx cost time %s", time.Since(tt))
+// 	js, _ := json.Marshal(coinbase)
+// 	t.Log(string(js))
+// 	t.Log(rewards)
+// }
+// func readFile() []*modules.Transaction {
+// 	txs := []*modules.Transaction{}
+// 	rw, err := os.Open("D:\\test\\node1\\geneSignResult.txt")
+// 	if err != nil {
+// 		panic(err)
+// 	}
+// 	defer rw.Close()
+// 	rb := bufio.NewReader(rw)
+// 	i := 0
+// 	for {
+// 		line, _, err := rb.ReadLine()
+// 		if err == io.EOF {
+// 			break
+// 		}
+// 		data, _ := hex.DecodeString(string(line))
+// 		tx := &modules.Transaction{}
+// 		rlp.DecodeBytes(data, tx)
+// 		txs = append(txs, tx)
+// 		i++
+// 		if i > 100000 {
+// 			return txs
+// 		}
+// 	}
+// 	return txs
+// }

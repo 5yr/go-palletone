@@ -32,8 +32,8 @@ type GlobalPropBase struct {
 	ChainParameters     core.ChainParameters          // 区块链网络参数
 }
 
-func NewGlobalPropBase() *GlobalPropBase {
-	return &GlobalPropBase{
+func NewGlobalPropBase() GlobalPropBase {
+	return GlobalPropBase{
 		ImmutableParameters: core.NewImmutChainParams(),
 		ChainParameters:     core.NewChainParams(),
 	}
@@ -41,9 +41,10 @@ func NewGlobalPropBase() *GlobalPropBase {
 
 // 全局属性的结构体定义
 type GlobalProperty struct {
-	*GlobalPropBase
+	GlobalPropBase
 
-	ActiveJuries       map[common.Address]bool //当前活跃Jury集合
+	// todo albert 待重构为数组，提高效率
+	ActiveJuries       map[common.Address]bool // 当前活跃Jury集合
 	ActiveMediators    map[common.Address]bool // 当前活跃 mediator 集合；每个维护间隔更新一次
 	PrecedingMediators map[common.Address]bool // 上一届 mediator
 }
@@ -51,18 +52,31 @@ type GlobalProperty struct {
 func NewGlobalProp() *GlobalProperty {
 	return &GlobalProperty{
 		GlobalPropBase:     NewGlobalPropBase(),
-		ActiveJuries:       make(map[common.Address]bool, 0),
-		ActiveMediators:    make(map[common.Address]bool, 0),
-		PrecedingMediators: make(map[common.Address]bool, 0),
+		ActiveJuries:       make(map[common.Address]bool),
+		ActiveMediators:    make(map[common.Address]bool),
+		PrecedingMediators: make(map[common.Address]bool),
 	}
+}
+
+type GlobalPropertyHistory struct {
+	// unit生产之间的间隔时间，以秒为单元。 interval in seconds between Units
+	MediatorInterval uint8 `json:"mediatorInterval"`
+
+	// 区块链维护事件之间的间隔，以秒为单元。 interval in sections between unit maintenance events
+	MaintenanceInterval uint32 `json:"maintenanceInterval"`
+
+	// 在维护时跳过的MediatorInterval数量。 number of MediatorInterval to skip at maintenance time
+	MaintenanceSkipSlots uint8 `json:"maintenanceSkipSlots"`
+
+	ActiveJuries    []common.Address //当前活跃Jury集合
+	ActiveMediators []common.Address // 当前活跃 mediator 集合；每个维护间隔更新一次
+	EffectiveTime   uint64           //生效时间
+	EffectiveHeight uint64           //生效高度
+	ExpiredTime     uint64           //失效时间
 }
 
 // 动态全局属性的结构体定义
 type DynamicGlobalProperty struct {
-	//HeadUnitNum  uint64      // 最新单元的编号(数量)
-	//HeadUnitHash common.Hash // 最新单元的 hash
-	//HeadUnitTime int64       // 最新单元的时间
-
 	// 防止同一个mediator连续生产单元导致分叉
 	LastMediator       common.Address // 最新单元的生产 mediator
 	IsShuffledSchedule bool           // 标记 mediator 的调度顺序是否刚被打乱
@@ -78,9 +92,11 @@ type DynamicGlobalProperty struct {
 	// 最低位表示最近一个slot， 初始值全为1。
 	RecentSlotsFilled uint64
 
-	LastIrreversibleUnitNum uint64
-	//NewestUnit     map[AssetId]*UnitProperty
-	//LastStableUnit map[AssetId]*UnitProperty
+	// If MaintenanceFlag is true, then the head unit is a maintenance unit.
+	// This means GetTimeSlot(1) - HeadBlockTime() will have a gap due to maintenance duration.
+	//
+	// This flag answers the question, "Was maintenance performed in the last call to ApplyUnit()?"
+	MaintenanceFlag bool
 }
 type UnitProperty struct {
 	Hash      common.Hash // 最近的单元hash
@@ -90,9 +106,6 @@ type UnitProperty struct {
 
 func NewDynGlobalProp() *DynamicGlobalProperty {
 	return &DynamicGlobalProperty{
-		//HeadUnitNum:             0,
-		//HeadUnitHash:            common.Hash{},
-
 		LastMediator:       common.Address{},
 		IsShuffledSchedule: false,
 
@@ -102,20 +115,9 @@ func NewDynGlobalProp() *DynamicGlobalProperty {
 
 		RecentSlotsFilled: ^uint64(0),
 
-		LastIrreversibleUnitNum: 0,
-		//NewestUnit:     map[AssetId]*UnitProperty{},
-		//LastStableUnit: map[AssetId]*UnitProperty{},
+		MaintenanceFlag: false,
 	}
 }
-
-//func (gdp *DynamicGlobalProperty) SetNewestUnit(header *Header) {
-//	gdp.NewestUnit[header.Number.AssetID] = &UnitProperty{header.Hash(), header.Number, header.Time}
-//}
-//func (gdp *DynamicGlobalProperty) SetLastStableUnit(header *Header) {
-//	gdp.LastStableUnit[header.Number.AssetID] = &UnitProperty{header.Hash(), header.Number, header.Time}
-//}
-
-const TERMINTERVAL = 50 //DEBUG:50, DEPLOY:15000
 
 func (gp *GlobalProperty) ActiveMediatorsCount() int {
 	return len(gp.ActiveMediators)
@@ -160,29 +162,16 @@ func (gp *GlobalProperty) GetActiveMediatorAddr(index int) common.Address {
 
 // GetActiveMediators, return the list of active mediators, and the order of the list from small to large
 func (gp *GlobalProperty) GetActiveMediators() []common.Address {
-	mediators := make([]common.Address, 0, gp.ActiveMediatorsCount())
+	var mediators common.Addresses
+	//mediators = make([]common.Address, 0, gp.ActiveMediatorsCount())
 
-	for medAdd, _ := range gp.ActiveMediators {
+	for medAdd := range gp.ActiveMediators {
 		mediators = append(mediators, medAdd)
 	}
 
-	sortAddress(mediators)
+	sort.Sort(mediators)
 
 	return mediators
-}
-
-func sortAddress(adds []common.Address) {
-	aSize := len(adds)
-	addStrs := make([]string, aSize, aSize)
-	for i, add := range adds {
-		addStrs[i] = add.Str()
-	}
-
-	sort.Strings(addStrs)
-
-	for i, addStr := range addStrs {
-		adds[i], _ = common.StringToAddress(addStr)
-	}
 }
 
 func InitGlobalProp(genesis *core.Genesis) *GlobalProperty {
@@ -197,7 +186,7 @@ func InitGlobalProp(genesis *core.Genesis) *GlobalProperty {
 
 	log.Debug("Set active mediators...")
 	// Set active mediators
-	for i := uint16(0); i < genesis.InitialActiveMediators; i++ {
+	for i := uint8(0); i < genesis.InitialParameters.ActiveMediatorCount; i++ {
 		initMed := genesis.InitialMediatorCandidates[i]
 		addr, err := core.StrToMedAdd(initMed.AddStr)
 		if err != nil {
@@ -211,12 +200,7 @@ func InitGlobalProp(genesis *core.Genesis) *GlobalProperty {
 
 func InitDynGlobalProp(genesis *Unit) *DynamicGlobalProperty {
 	log.Debug("initialize dynamic global property...")
-
-	// Create dynamic global properties
 	dgp := NewDynGlobalProp()
-	//dgp.HeadUnitTime = genesis.InitialTimestamp
-	//dgp.HeadUnitHash = genesisUnitHash
-	//dgp.SetNewestUnit(genesis.Header())
-	//dgp.SetLastStableUnit(genesis.Header())
+
 	return dgp
 }

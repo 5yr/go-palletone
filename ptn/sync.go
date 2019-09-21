@@ -25,14 +25,12 @@ import (
 	"github.com/palletone/go-palletone/common/log"
 	"github.com/palletone/go-palletone/common/p2p/discover"
 	"github.com/palletone/go-palletone/dag/modules"
-	"github.com/palletone/go-palletone/dag/txspool"
 	"github.com/palletone/go-palletone/ptn/downloader"
-	"strings"
 )
 
 const (
-	forceSyncCycle      = 10 * time.Second // Time interval to force syncs, even if few peers are available
-	minDesiredPeerCount = 5                // Amount of peers desired to start syncing
+	forceSyncCycle      = 5 * time.Second // Time interval to force syncs, even if few peers are available
+	minDesiredPeerCount = 5               //5                // Amount of peers desired to start syncing
 
 	// This is the target size for the packs of transactions sent by txsyncLoop.
 	// A pack can get larger than this if a single transactions exceeds this size.
@@ -45,26 +43,26 @@ type txsync struct {
 }
 
 // syncTransactions starts sending all currently pending transactions to the given peer.
-func (pm *ProtocolManager) syncTransactions(p *peer) {
-	var txs modules.Transactions
-	pending, _ := pm.txpool.Pending()
-	for _, this := range pending {
-		for _, batch := range this {
-			txs = append(txs, txspool.PooltxToTx(batch))
-		}
-	}
-	if len(txs) == 0 {
-		return
-	}
-	select {
-	case pm.txsyncCh <- &txsync{p, txs}:
-	case <-pm.quitSync:
-	}
-}
+//func (pm *ProtocolManager) syncTransactions(p *peer) {
+//	var txs modules.Transactions
+//	pending, _ := pm.txpool.Pending()
+//	for _, this := range pending {
+//		for _, batch := range this {
+//			txs = append(txs, txspool.PooltxToTx(batch))
+//		}
+//	}
+//	if len(txs) == 0 {
+//		return
+//	}
+//	select {
+//	case pm.txsyncCh <- &txsync{p, txs}:
+//	case <-pm.quitSync:
+//	}
+//}
 
 // txsyncLoop takes care of the initial transaction sync for each new
 // connection. When a new peer appears, we relay all currently pending
-// transactions. In order to minimise egress bandwidth usage, we send
+// transactions. In order to minimize egress bandwidth usage, we send
 // the transactions in small packs to one peer at a time.
 func (pm *ProtocolManager) txsyncLoop() {
 	var (
@@ -133,20 +131,15 @@ func (pm *ProtocolManager) txsyncLoop() {
 	}
 }
 
-// syncer is responsible for periodically synchronising with the network, both
+// syncer is responsible for periodically synchronizing with the network, both
 // downloading hashes and blocks as well as handling the announcement handler.
-func (pm *ProtocolManager) syncer() {
+func (pm *ProtocolManager) syncer(syncCh chan bool) {
 	// Start and ensure cleanup of sync mechanisms
-
 	pm.fetcher.Start()
 	defer pm.fetcher.Stop()
 	defer pm.downloader.Terminate()
 
-	//pm.lightFetcher.Start()
-	//defer pm.lightFetcher.Stop()
-	//defer pm.lightdownloader.Terminate()
-
-	// Wait for different events to fire synchronisation operations
+	// Wait for different events to fire synchronization operations
 	forceSync := time.NewTicker(forceSyncCycle)
 	defer forceSync.Stop()
 
@@ -157,12 +150,12 @@ func (pm *ProtocolManager) syncer() {
 			if pm.peers.Len() < minDesiredPeerCount {
 				break
 			}
-			go pm.syncall()
+			go pm.syncall(syncCh)
 
 		case <-forceSync.C:
 			// Force a sync even if not enough peers are present
-			log.Debug("start force Sync")
-			go pm.syncall()
+			//log.Debug("start force Sync")
+			go pm.syncall(syncCh)
 
 		case <-pm.noMorePeers:
 			return
@@ -170,58 +163,27 @@ func (pm *ProtocolManager) syncer() {
 	}
 }
 
-func (pm *ProtocolManager) syncall() {
-	//YING 0x601892ec080000000000000000000000
-	//YOU 0x4000af9e080000000000000000000000
-
-	asset, err := modules.NewAsset(strings.ToUpper(pm.SubProtocols[0].Name), modules.AssetType_FungibleToken, 8, []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, modules.UniqueIdType_Null, modules.UniqueId{})
-	if err != nil {
-		log.Error("ProtocolManager syncall asset err", err)
-		return
-	}
-	log.Info("ProtocolManager syncall", "pm.SubProtocols[0].Name", pm.SubProtocols[0].Name)
-	peer := pm.peers.BestPeer(asset.AssetId)
-	pm.synchronise(peer, asset.AssetId)
-	//return
-	if pm.SubProtocols[0].Name != ProtocolName {
-		return
-	}
-	//pm.lightsync(peer)
+func (pm *ProtocolManager) syncall(syncCh chan bool) {
+	log.Debug("ProtocolManager syncall", "assetId", pm.mainAssetId)
+	peer := pm.peers.BestPeer(pm.mainAssetId)
+	pm.synchronize(peer, pm.mainAssetId, syncCh)
 }
 
-/*
-func (pm *ProtocolManager) lightsync(peer *peer) {
-	if peer == nil {
-		log.Debug("ProtocolManager lightsync peer is nil")
-		return
-	}
-	leafnodes, err := pm.lightdownloader.FetchAllToken(peer.id)
-	if err != nil {
-		log.Info("sync get all leaf nodes", "counts leaf nodes", len(leafnodes), "err:", err)
-		return
-	}
-
-	for _, header := range leafnodes {
-		//TODO
-		pm.lightsynchronise(peer, header.ChainIndex().AssetID)
-	}
-}
-*/
-// synchronise tries to sync up our local block chain with a remote peer.
-func (pm *ProtocolManager) synchronise(peer *peer, assetId modules.AssetId) {
+// synchronize tries to sync up our local block chain with a remote peer.
+func (pm *ProtocolManager) synchronize(peer *peer, assetId modules.AssetId, syncCh chan bool) {
 	// Short circuit if no peers are available
 	if peer == nil {
-		log.Debug("ProtocolManager synchronise peer is nil")
+		log.Debug("ProtocolManager synchronize peer is nil")
 		return
 	}
-	log.Debug("Enter ProtocolManager synchronise", "peer id:", peer.id)
-	defer log.Debug("End ProtocolManager synchronise", "peer id:", peer.id)
+	log.Debug("Enter ProtocolManager synchronize", "peer id:", peer.id)
+	defer log.Debug("End ProtocolManager synchronize", "peer id:", peer.id)
 
 	// Make sure the peer's TD is higher than our own
-	//TODO compare local assetId & chainIndex whith remote peer assetId & chainIndex
-	currentUnit := pm.dag.GetCurrentUnit(assetId) //pm.dag.CurrentUnit()
+	//TODO compare local assetId & chainIndex with remote peer assetId & chainIndex
+	currentUnit := pm.dag.GetCurrentUnit(assetId)
 	if currentUnit == nil {
-		log.Info("===synchronise currentUnit is nil have not genesis===")
+		log.Error("synchronize currentUnit is nil have not genesis")
 		return
 	}
 	index := currentUnit.Number().Index
@@ -232,126 +194,52 @@ func (pm *ProtocolManager) synchronise(peer *peer, assetId modules.AssetId) {
 		_, err = pm.dag.GetUnitByHash(currentUnit.ParentHash()[0])
 	}
 
-	if index >= pindex && pindex > 0 && err == nil {
+	//if index >= pindex && pindex > 0 && err == nil {
+	if index >= pindex && err == nil {
+		if atomic.LoadUint32(&pm.fastSync) == 1 {
+			log.Debug("Fast sync complete, auto disabling")
+			atomic.StoreUint32(&pm.fastSync, 0)
+		}
 		atomic.StoreUint32(&pm.acceptTxs, 1)
-		log.Debug("Do not need synchronise", "local peer.index:", pindex, "local index:", number.Index, "header hash:", pHead)
+		log.Debug("Do not need synchronize", "local peer.index:", pindex, "local index:", number.Index,
+			"header hash:", pHead)
+		//TODO notice light protocol to sync corsheader
+		if syncCh != nil {
+			syncCh <- true
+		}
 		return
 	}
-	log.Debug("ProtocolManager", "synchronise local unit index:", index, "local peer index:", pindex, "header hash:", pHead)
+	log.Debug("ProtocolManager", "synchronize local unit index:", index, "local peer index:", pindex,
+		"header hash:", pHead)
 	// Otherwise try to sync with the downloader
 	mode := downloader.FullSync
 
 	if atomic.LoadUint32(&pm.fastSync) == 1 {
 		// Fast sync was explicitly requested, and explicitly granted
 		mode = downloader.FastSync
-		//TODO :Make sure the peer's total difficulty we are synchronizing is higher.
-		//		if pm.blockchain.GetTdByHash(pm.blockchain.CurrentFastBlock().Hash()).Cmp(pTd) >= 0 {
-		//			return
-		//		}
 	}
-	log.Debug("ProtocolManager", "synchronise local unit index:", index, "peer index:", pindex, "header hash:", pHead)
+	log.Debug("ProtocolManager", "synchronize local unit index:", index, "peer index:", pindex,
+		"header hash:", pHead)
+	pm.downloader.SetFastStableIndex(pm.peers.StableIndex(assetId))
 	// Run the sync cycle, and disable fast sync if we've went past the pivot block
-	if err := pm.downloader.Synchronise(peer.id, pHead, pindex, mode, assetId); err != nil {
-		log.Debug("ptn sync downloader.", "Synchronise err:", err)
+	if err := pm.downloader.Synchronize(peer.id, pHead, pindex, mode, assetId); err != nil {
+		log.Debug("ptn sync downloader.", "Synchronize err:", err)
 		return
 	}
 
 	if atomic.LoadUint32(&pm.fastSync) == 1 {
-		log.Debug("Fast sync complete, auto disabling")
+		log.Info("Fast sync complete, auto disabling")
 		atomic.StoreUint32(&pm.fastSync, 0)
 	}
 	atomic.StoreUint32(&pm.acceptTxs, 1) // Mark initial sync done
+	log.Info("ptn sync complete")
 
-	head := pm.dag.CurrentUnit(assetId)
-	if head != nil && head.UnitHeader.Number.Index > 0 {
-		go pm.BroadcastUnit(head, false /*, noBroadcastMediator*/)
-	}
-}
-
-/*
-func (pm *ProtocolManager) lightsynchronise(peer *peer, assetId modules.AssetId) {
-	// Short circuit if no peers are available
-	if peer == nil {
-		log.Debug("ProtocolManager light synchronise peer is nil")
-		return
-	}
-	log.Debug("Enter ProtocolManager light synchronise", "peer id:", peer.id)
-	defer log.Debug("End ProtocolManager light synchronise", "peer id:", peer.id)
-
-	// Make sure the peer's TD is higher than our own
-	//TODO must recover
-	currentHeader := pm.dag.CurrentHeader(assetId)
-	if currentHeader == nil {
-		log.Info("light synchronise current header is nil")
-		return
-	}
-	hash, number := peer.LightHead(assetId)
-	if common.EmptyHash(hash) || (!common.EmptyHash(hash) && currentHeader.Number.Index > number.Index) {
-		return
-	}
-
-	// Otherwise try to sync with the downloader
-	mode := downloader.LightSync
-
-	// Run the sync cycle, and disable fast sync if we've went past the pivot block
-	if err := pm.lightdownloader.Synchronise(peer.id, currentHeader.Hash(), currentHeader.Number.Index, mode, assetId); err != nil {
-		log.Debug("ptn sync downloader.", "Synchronise err:", err)
-		return
-	}
-
-	//if atomic.LoadUint32(&pm.fastSync) == 1 {
-	//	log.Debug("Fast sync complete, auto disabling")
-	//	atomic.StoreUint32(&pm.fastSync, 0)
-	//}
-
-	head := pm.dag.CurrentHeader(assetId)
-	if head != nil && head.Number.Index > 0 {
-		go pm.BroadcastLocalLightHeader(head)
-	}
-}
-*/
-func (pm *ProtocolManager) getMaxNodes(headers []*modules.Header, assetId modules.AssetId) (*modules.Header, error) {
-	size := len(headers)
-	if size == 0 {
-		return nil, nil
-	}
-	if size == 1 {
-		return headers[0], nil
-	}
-
-	maxHeader := modules.Header{}
-	for _, header := range headers {
-		if assetId == header.Number.AssetID && header.Number.Index > maxHeader.Number.Index {
-			maxHeader = *header
+	cunit := pm.dag.GetCurrentUnit(assetId)
+	if cunit != nil && cunit.UnitHeader.Number.Index > 0 {
+		go pm.BroadcastUnit(cunit, false)
+		//TODO notice light protocol to sync corsheader
+		if syncCh != nil {
+			syncCh <- true
 		}
 	}
-	return &maxHeader, nil
 }
-
-/*TODO must save
-//fmt.Println("findAncestor===")
-//fmt.Println("local=", ceil)
-//fmt.Println("remote=", height)
-//floor, ceil := uint64(0), uint64(0)
-//TODO xiaozhi
-//headers, err := d.lightdag.GetAllLeafNodes()
-//if err != nil {
-//	log.Info("===findAncestor===", "GetAllLeafNodes err:", err)
-//	return floor, nil
-//}
-//header, err := d.getMaxNodes(headers, assetId)
-//
-//if err != nil {
-//	log.Info("===findAncestor===", "getMaxNodes err:", err)
-//	return floor, err
-//}
-////TODO xiaozhi
-
-//if header != nil {
-//	ceil = header.Number.Index
-//	log.Debug("Looking for common ancestor", "local assetid", header.Number.AssetID.String(), "local index", ceil, "remote", latest.Number.Index)
-//} else {
-//	ceil = 0
-//	log.Debug("Looking for common ancestor", "local index", ceil, "remote", latest.Number.Index)
-//}
-*/

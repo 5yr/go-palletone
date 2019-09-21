@@ -52,16 +52,15 @@ const (
 	BlockBodiesMsg     = 0x06
 	NewBlockMsg        = 0x07
 	NewBlockHeaderMsg  = 0x08
-	NewProducedUnitMsg = 0x09
-	VSSDealMsg         = 0x0a
-	VSSResponseMsg     = 0x0b
-	SigShareMsg        = 0x0c
-	GroupSigMsg        = 0x0d
-	GetLeafNodesMsg    = 0x0e
-	LeafNodesMsg       = 0x0f
-	ContractMsg        = 0x10
-	ElectionMsg        = 0x11
-	AdapterMsg         = 0x12
+	VSSDealMsg         = 0x09
+	VSSResponseMsg     = 0x0a
+	SigShareMsg        = 0x0b
+	GroupSigMsg        = 0x0c
+	GetLeafNodesMsg    = 0x0d
+	LeafNodesMsg       = 0x0e
+	ContractMsg        = 0x0f
+	ElectionMsg        = 0x10
+	AdapterMsg         = 0x11
 
 	GetNodeDataMsg = 0x20
 	NodeDataMsg    = 0x21
@@ -131,26 +130,30 @@ type TxDesc struct {
 type txPool interface {
 	// AddRemotes should add the given transactions to the pool.
 	Stop()
-	AddLocal(tx *modules.TxPoolTransaction) error
-	AddLocals(txs []*modules.TxPoolTransaction) []error
+	AddLocal(tx *modules.Transaction) error
+	AddLocals(txs []*modules.Transaction) []error
+	AddSequenTx(tx *modules.Transaction) error
+	AddSequenTxs(txs []*modules.Transaction) error
 	AllHashs() []*common.Hash
 	AllTxpoolTxs() map[common.Hash]*modules.TxPoolTransaction
-	Content() (map[common.Hash]*modules.Transaction, map[common.Hash]*modules.Transaction)
+	Content() (map[common.Hash]*modules.TxPoolTransaction, map[common.Hash]*modules.TxPoolTransaction)
 	Get(hash common.Hash) (*modules.TxPoolTransaction, common.Hash)
 	GetPoolTxsByAddr(addr string) ([]*modules.TxPoolTransaction, error)
 	Stats() (int, int, int)
-	GetSortedTxs(hash common.Hash) ([]*modules.TxPoolTransaction, common.StorageSize)
+	GetSortedTxs(hash common.Hash, index uint64) ([]*modules.TxPoolTransaction, common.StorageSize)
 	SendStoredTxs(hashs []common.Hash) error
 	DiscardTxs(hashs []common.Hash) error
 	//DiscardTx(hash common.Hash) error
 	GetUtxoEntry(outpoint *modules.OutPoint) (*modules.Utxo, error)
 	AddRemote(tx *modules.Transaction) error
 	AddRemotes([]*modules.Transaction) []error
-	ProcessTransaction(tx *modules.Transaction, allowOrphan bool, rateLimit bool, tag txspool.Tag) ([]*txspool.TxDesc, error)
+	ProcessTransaction(tx *modules.Transaction, allowOrphan bool, rateLimit bool,
+		tag txspool.Tag) ([]*txspool.TxDesc, error)
 	// Pending should return pending transactions.
 	// The slice should be modifiable by the caller.
 	Pending() (map[common.Hash][]*modules.TxPoolTransaction, error)
-	SetPendingTxs(unit_hash common.Hash, txs []*modules.Transaction) error
+	Queued() ([]*modules.TxPoolTransaction, error)
+	SetPendingTxs(unit_hash common.Hash, num uint64, txs []*modules.Transaction) error
 	ResetPendingTxs(txs []*modules.Transaction) error
 	// SubscribeTxPreEvent should return an event subscription of
 	// TxPreEvent and send events to the given channel.
@@ -167,7 +170,7 @@ type statusData struct {
 	Index           *modules.ChainIndex
 	GenesisUnit     common.Hash
 	CurrentHeader   common.Hash
-	//Mediator        bool
+	//StableIndex     *modules.ChainIndex
 }
 
 // newBlockHashesData is the network packet for the block announcements.
@@ -186,8 +189,6 @@ type hashOrNumber struct {
 	Hash   common.Hash // Block hash from which to retrieve headers (excludes Number)
 	Number modules.ChainIndex
 }
-
-type leafNodes []*modules.Header
 
 /*
 // EncodeRLP is a specialized encoder for hashOrNumber to encode only one of the
@@ -230,15 +231,3 @@ type blockBody struct {
 
 // blockBodiesData is the network packet for block content distribution.
 type blockBodiesData []blockBody
-
-// vss boardcast the data content of a single vss message.
-//type vssDealMsg struct {
-//	NodeId string
-//	Deal   *mp.VSSDealEvent
-//}
-
-// vss response boardcast the data content of a single vss message.
-//type vssRespMsg struct {
-//	NodeId string
-//	Resp   *mp.VSSResponseEvent
-//}

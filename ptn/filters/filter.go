@@ -34,7 +34,6 @@ type Backend interface {
 	HeaderByNumber(ctx context.Context, blockNr rpc.BlockNumber) (*modules.Header, error)
 	//GetReceipts(ctx context.Context, blockHash common.Hash) (modules.Receipts, error)
 	//GetLogs(ctx context.Context, blockHash common.Hash) ([][]*types.Log, error)
-
 	SubscribeTxPreEvent(chan<- modules.TxPreEvent) event.Subscription
 	//SubscribeChainEvent(ch chan<- coredata.ChainEvent) event.Subscription
 	//SubscribeRemovedLogsEvent(ch chan<- coredata.RemovedLogsEvent) event.Subscription
@@ -62,7 +61,8 @@ func New(backend Backend, begin, end int64, addresses []common.Address, topics [
 	// Flatten the address and topic filter clauses into a single bloombits filter
 	// system. Since the bloombits are not positional, nil topics are permitted,
 	// which get flattened into a nil byte slice.
-	var filters [][][]byte
+	//var filters [][][]byte
+	filters := [][][]byte{}
 	if len(addresses) > 0 {
 		filter := make([][]byte, len(addresses))
 		for i, address := range addresses {
@@ -90,44 +90,3 @@ func New(backend Backend, begin, end int64, addresses []common.Address, topics [
 		matcher:   bloombits.NewMatcher(size, filters),
 	}
 }
-
-func includes(addresses []common.Address, a common.Address) bool {
-	for _, addr := range addresses {
-		if addr == a {
-			return true
-		}
-	}
-
-	return false
-}
-
-/*
-func bloomFilter(bloom types.Bloom, addresses []common.Address, topics [][]common.Hash) bool {
-	if len(addresses) > 0 {
-		var included bool
-		for _, addr := range addresses {
-			if types.BloomLookup(bloom, addr) {
-				included = true
-				break
-			}
-		}
-		if !included {
-			return false
-		}
-	}
-
-	for _, sub := range topics {
-		included := len(sub) == 0 // empty rule set == wildcard
-		for _, topic := range sub {
-			if types.BloomLookup(bloom, topic) {
-				included = true
-				break
-			}
-		}
-		if !included {
-			return false
-		}
-	}
-	return true
-}
-*/

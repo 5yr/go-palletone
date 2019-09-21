@@ -6,6 +6,7 @@ Resource          developerApplyCashbackParams.txt
 Resource          developerPayToDepositContractParams.txt
 Resource          getAgreeForBecomeMediatorListParams.txt
 Resource          getBecomeMediatorApplyListParams.txt
+Resource          getMediatorDepositWithAddrParams.txt
 Resource          getCandidateBalanceWithAddrParams.txt
 Resource          getListForCashbackApplicationParams.txt
 Resource          getListForDeveloperCandidateParams.txt
@@ -16,17 +17,26 @@ Resource          getQuitMediatorApplyListParams.txt
 Resource          handleForApplyBecomeMediatorParams.txt
 Resource          handleForApplyForQuitMediatorParams.txt
 Resource          handleForCashbackApplicationParams.txt
+Resource          handleForMediatorApplyCashbackParams.txt
 Resource          handleForForfeitureApplicationParams.txt
 Resource          juryApplyCashbackParams.txt
 Resource          juryPayToDepositContractParams.txt
 Resource          mediatorApplyCashbackParams.txt
 Resource          mediatorPayToDepositContractParams.txt
 Resource          postRequest.txt
+Resource          handleEachDay.txt
+Resource          getBalance.txt
+Resource          CreateToken.txt
+Resource          GetAllMediators.txt
+Resource          GetAllNodes.txt
+Resource          getJuryBalance.txt
+Resource          getAllJury.txt
 
 *** Variables ***
-${depositContractQuery}    ptn_depositContractQuery
-${depositContractInvoke}    ptn_depositContractInvoke
+${depositContractQuery}    contract_depositContractQuery
+${depositContractInvoke}    contract_depositContractInvoke
 ${Url}            http://127.0.0.1:8545
 ${depositContractAddress}    PCGTta3M4t3yXu8uRgkKvaWd2d8DR32W9vM
-${amount}         1000000000
-${fee}            1000000000
+${amount}         1
+${fee}            1
+${medDepositAmount}    50

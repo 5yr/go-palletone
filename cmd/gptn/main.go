@@ -33,7 +33,6 @@ import (
 	"github.com/palletone/go-palletone/core/accounts"
 	"github.com/palletone/go-palletone/core/node"
 	"github.com/palletone/go-palletone/internal/debug"
-	"github.com/palletone/go-palletone/ptn"
 	"github.com/palletone/go-palletone/ptnclient"
 	"github.com/palletone/go-palletone/statistics/metrics"
 	"gopkg.in/urfave/cli.v1"
@@ -88,7 +87,7 @@ var (
 		utils.MaxPeersFlag,
 		utils.MaxPendingPeersFlag,
 		utils.EtherbaseFlag,
-		utils.GasPriceFlag,
+		utils.CryptoLibFlag,
 		utils.MinerThreadsFlag,
 		utils.MiningEnabledFlag,
 		//utils.TargetGasLimitFlag,
@@ -182,7 +181,7 @@ func init() {
 		nodeInfoCommand,          // 获取本节点信息
 		timestampCommand,         // 获取指定时间的时间戳
 		mediatorCommand,          // mediator 管理
-		certCommand,              //证书管理
+		//certCommand,              //证书管理
 
 	}
 	sort.Sort(cli.CommandsByName(app.Commands))
@@ -226,6 +225,7 @@ func main() {
 		2. c.Run(context)
 		3. HandleAction(c.Action, context)
 	*/
+	//welcomePalletOne()
 	if err := app.Run(os.Args); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -236,6 +236,7 @@ func main() {
 // It creates a default node based on the command line arguments and runs it in
 // blocking mode, waiting for it to be shut down.
 func gptn(ctx *cli.Context) error {
+	welcomePalletOne()
 	node := makeFullNode(ctx, false)
 	startNode(ctx, node)
 	node.Wait()
@@ -260,7 +261,7 @@ func startNode(ctx *cli.Context, stack *node.Node) {
 	unlocks := strings.Split(ctx.GlobalString(utils.UnlockedAccountFlag.Name), ",")
 	for i, account := range unlocks {
 		if trimmed := strings.TrimSpace(account); trimmed != "" {
-			unlockAccount(ctx, ks, trimmed, i, passwords)
+			unlockAccount(ks, trimmed, i, passwords)
 		}
 	}
 
@@ -308,15 +309,38 @@ func startNode(ctx *cli.Context, stack *node.Node) {
 		}
 	}()
 	// Start auxiliary services if enabled
-	//如果指定了--mine 选项，就自动开始挖矿
-	if ctx.GlobalBool(utils.MiningEnabledFlag.Name) || ctx.GlobalBool(utils.DeveloperFlag.Name) {
-		// Mining only makes sense if a full PalletOne node is running
-		if ctx.GlobalBool(utils.LightModeFlag.Name) || ctx.GlobalString(utils.SyncModeFlag.Name) == "light" {
-			utils.Fatalf("Light clients do not support mining")
-		}
-		var palletone *ptn.PalletOne
-		if err := stack.Service(&palletone); err != nil {
-			utils.Fatalf("PalletOne service not running: %v", err)
-		}
-	}
+	//if ctx.GlobalBool(utils.MiningEnabledFlag.Name) || ctx.GlobalBool(utils.DeveloperFlag.Name) {
+	//	// Mining only makes sense if a full PalletOne node is running
+	//	if ctx.GlobalBool(utils.LightModeFlag.Name) || ctx.GlobalString(utils.SyncModeFlag.Name) == "light" {
+	//		utils.Fatalf("Light clients do not support mining")
+	//	}
+	//	var palletone *ptn.PalletOne
+	//	if err := stack.Service(&palletone); err != nil {
+	//		utils.Fatalf("PalletOne service not running: %v", err)
+	//	}
+	//}
+}
+
+func welcomePalletOne() {
+	///*
+	//"*    _____      _ _      _    ____                    *\n"
+	//"*   |  __ \    | | |    | |  / __ \                   *\n"
+	//"*   | |__) |_ _| | | ___| |_| |  | |_ __   ___        *\n"
+	//"*   |  ___/ _` | | |/ _ \ __| |  | | '_ \ / _ \       *\n"
+	//"*   | |  | (_| | | |  __/ |_| |__| | | | |  __/       *\n"
+	//"*   |_|   \__,_|_|_|\___|\__|\____/|_| |_|\___|       *\n"
+	//*/
+	//
+	//
+	fmt.Print("\n" +
+		"    * * * * * Welcome to PalletOne! * * * * *        \n" +
+		"    _____      _ _      _    ____                    \n" +
+		"   |  __ \\    | | |    | |  / __ \\                 \n" +
+		"   | |__) |_ _| | | ___| |_| |  | |_ __   ___        \n" +
+		"   |  ___/ _` | | |/ _ \\ __| |  | | '_ \\ / _ \\    \n" +
+		"   | |  | (_| | | |  __/ |_| |__| | | | |  __/       \n" +
+		"   |_|   \\__,_|_|_|\\___|\\__|\\____/|_| |_|\\___|  \n" +
+		"                                                     \n" +
+		"    * * * * * * * * * * * * * * * * * * * * *        \n" +
+		"\n")
 }

@@ -32,6 +32,7 @@ import (
 	"github.com/palletone/go-palletone/consensus/jury"
 	mp "github.com/palletone/go-palletone/consensus/mediatorplugin"
 	"github.com/palletone/go-palletone/dag/modules"
+	"github.com/palletone/go-palletone/dag/rwset"
 	"github.com/palletone/go-palletone/ptn/downloader"
 )
 
@@ -54,10 +55,9 @@ func (pm *ProtocolManager) GetBlockHeadersMsg(msg p2p.Msg, p *peer) error {
 		return errResp(ErrDecode, "%v: %v", msg, err)
 	}
 
-	log.Debug("ProtocolManager", "GetBlockHeadersMsg getBlockHeadersData:", query)
-
 	hashMode := query.Origin.Hash != (common.Hash{})
-	log.Debug("ProtocolManager", "GetBlockHeadersMsg hashMode:", hashMode)
+	log.Debug("ProtocolManager", "GetBlockHeadersMsg getBlockHeadersData:", query,
+		"GetBlockHeadersMsg hashMode:", hashMode)
 	// Gather headers until the fetch or network limits is reached
 	var (
 		bytes   common.StorageSize
@@ -65,7 +65,8 @@ func (pm *ProtocolManager) GetBlockHeadersMsg(msg p2p.Msg, p *peer) error {
 		unknown bool
 	)
 
-	for !unknown && len(headers) < int(query.Amount) && bytes < softResponseLimit && len(headers) < downloader.MaxHeaderFetch {
+	for !unknown && len(headers) < int(query.Amount) && bytes < softResponseLimit &&
+		len(headers) < downloader.MaxHeaderFetch {
 		// Retrieve the next header satisfying the query
 		var origin *modules.Header
 		if hashMode {
@@ -88,7 +89,6 @@ func (pm *ProtocolManager) GetBlockHeadersMsg(msg p2p.Msg, p *peer) error {
 		switch {
 		case hashMode && query.Reverse:
 			// Hash based traversal towards the genesis block
-			log.Debug("ProtocolManager", "GetBlockHeadersMsg ", "Hash based towards the genesis block")
 			for i := 0; i < int(query.Skip)+1; i++ {
 				if header, err := pm.dag.GetHeaderByHash(query.Origin.Hash); err == nil && header != nil {
 					if number != 0 {
@@ -96,40 +96,44 @@ func (pm *ProtocolManager) GetBlockHeadersMsg(msg p2p.Msg, p *peer) error {
 					}
 					number--
 				} else {
-					//log.Info("========GetBlockHeadersMsg========", "number", number, "err:", err)
 					unknown = true
 					break
 				}
 			}
 		case hashMode && !query.Reverse:
 			// Hash based traversal towards the leaf block
-			log.Debug("ProtocolManager", "GetBlockHeadersMsg ", "Hash based towards the leaf block")
+			//log.Debug("ProtocolManager", "GetBlockHeadersMsg ", "Hash based towards the leaf block")
 			var (
 				current = origin.Number.Index
 				next    = current + query.Skip + 1
 				index   = origin.Number
 			)
-			log.Debug("ProtocolManager", "GetBlockHeadersMsg next", next, "current:", current)
+			//log.Debug("ProtocolManager", "GetBlockHeadersMsg next", next, "current:", current)
 			if next <= current {
 				infos, _ := json.MarshalIndent(p.Peer.Info(), "", "  ")
-				log.Warn("GetBlockHeaders skip overflow attack", "current", current, "skip", query.Skip, "next", next, "attacker", infos)
+				log.Warn("GetBlockHeaders skip overflow attack", "current", current, "skip", query.Skip,
+					"next", next, "attacker", infos)
 				unknown = true
 			} else {
 				index.Index = next
 				log.Debug("ProtocolManager", "GetBlockHeadersMsg index.Index:", index.Index)
 				if header, _ := pm.dag.GetHeaderByNumber(index); header != nil {
 					hashs := pm.dag.GetUnitHashesFromHash(header.Hash(), query.Skip+1)
-					log.Debug("ProtocolManager", "GetUnitHashesFromHash len(hashs):", len(hashs), "header.index:", header.Number.Index, "header.hash:", header.Hash().String(), "query.Skip+1", query.Skip+1)
+					log.Debug("ProtocolManager", "GetUnitHashesFromHash len(hashs):", len(hashs),
+						"header.index:", header.Number.Index, "header.hash:", header.Hash().String(),
+						"query.Skip+1", query.Skip+1)
 					if len(hashs) > int(query.Skip) && (hashs[query.Skip] == query.Origin.Hash) {
 						query.Origin.Hash = header.Hash()
 					} else {
-						log.Debug("ProtocolManager", "GetBlockHeadersMsg unknown = true; pm.dag.GetUnitHashesFromHash not equal origin hash.", "")
-						log.Debug("ProtocolManager", "GetBlockHeadersMsg header.Hash()", header.Hash(), "query.Skip+1:", query.Skip+1, "query.Origin.Hash:", query.Origin.Hash)
-						//log.Debug("ProtocolManager", "GetBlockHeadersMsg pm.dag.GetUnitHashesFromHash(header.Hash(), query.Skip+1)[query.Skip]:", pm.dag.GetUnitHashesFromHash(header.Hash(), query.Skip+1)[query.Skip])
+						log.Debug("ProtocolManager GetBlockHeadersMsg unknown = true;" +
+							" pm.dag.GetUnitHashesFromHash not equal origin hash.")
+						log.Debug("ProtocolManager", "GetBlockHeadersMsg header.Hash()", header.Hash(),
+							"query.Skip+1:", query.Skip+1, "query.Origin.Hash:", query.Origin.Hash)
 						unknown = true
 					}
 				} else {
-					log.Debug("ProtocolManager", "GetBlockHeadersMsg unknown = true; pm.dag.GetHeaderByNumber not found. Index:", index.Index)
+					log.Debug("ProtocolManager", "GetBlockHeadersMsg unknown = true; pm.dag.GetHeaderByNumber"+
+						" not found. Index:", index.Index)
 					unknown = true
 				}
 			}
@@ -139,7 +143,7 @@ func (pm *ProtocolManager) GetBlockHeadersMsg(msg p2p.Msg, p *peer) error {
 			if query.Origin.Number.Index >= query.Skip+1 {
 				query.Origin.Number.Index -= query.Skip + 1
 			} else {
-				log.Info("ProtocolManager", "GetBlockHeadersMsg query.Reverse", "unknown is true")
+				log.Debug("ProtocolManager", "GetBlockHeadersMsg query.Reverse", "unknown is true")
 				unknown = true
 			}
 
@@ -149,14 +153,16 @@ func (pm *ProtocolManager) GetBlockHeadersMsg(msg p2p.Msg, p *peer) error {
 			query.Origin.Number.Index += query.Skip + 1
 		}
 	}
-	start := uint64(0)
-	end := uint64(0)
+
 	number := len(headers)
 	if number > 0 {
-		start = uint64(headers[0].Number.Index)
-		end = uint64(headers[number-1].Number.Index)
+		log.Debug("ProtocolManager", "GetBlockHeadersMsg query.Amount", query.Amount, "send number:", number,
+			"start:", headers[0].Number.Index, "end:", headers[number-1].Number.Index, " getBlockHeadersData:", query)
+	} else {
+		log.Debug("ProtocolManager", "GetBlockHeadersMsg query.Amount", query.Amount, "send number:", 0,
+			" getBlockHeadersData:", query)
 	}
-	log.Debug("ProtocolManager", "GetBlockHeadersMsg query.Amount", query.Amount, "send number:", len(headers), "start:", start, "end:", end, " getBlockHeadersData:", query)
+
 	return p.SendUnitHeaders(headers)
 }
 
@@ -176,7 +182,7 @@ func (pm *ProtocolManager) BlockHeadersMsg(msg p2p.Msg, p *peer) error {
 		headers = pm.fetcher.FilterHeaders(p.id, headers, time.Now())
 	}
 	if len(headers) > 0 || !filter {
-		log.Debug("===BlockHeadersMsg ===", "len(headers):", len(headers))
+		//log.Debug("===BlockHeadersMsg ===", "len(headers):", len(headers))
 		err := pm.downloader.DeliverHeaders(p.id, headers)
 		if err != nil {
 			log.Debug("Failed to deliver headers", "err", err.Error())
@@ -187,8 +193,6 @@ func (pm *ProtocolManager) BlockHeadersMsg(msg p2p.Msg, p *peer) error {
 
 func (pm *ProtocolManager) GetBlockBodiesMsg(msg p2p.Msg, p *peer) error {
 	// Decode the retrieval message
-	log.Debug("Enter GetBlockBodiesMsg")
-	defer log.Debug("End GetBlockBodiesMsg")
 	msgStream := rlp.NewStream(msg.Payload, uint64(msg.Size))
 	if _, err := msgStream.List(); err != nil {
 		log.Debug("msgStream.List() err:", err)
@@ -210,7 +214,7 @@ func (pm *ProtocolManager) GetBlockBodiesMsg(msg p2p.Msg, p *peer) error {
 			log.Debug("msgStream.Decode", "err", err)
 			return errResp(ErrDecode, "msg %v: %v", msg, err)
 		}
-		log.Debug("GetBlockBodiesMsg", "hash", hash)
+		//log.Debug("GetBlockBodiesMsg", "hash", hash)
 		// Retrieve the requested block body, stopping if enough was found
 		txs, err := pm.dag.GetUnitTransactions(hash)
 		if err != nil || len(txs) == 0 {
@@ -219,13 +223,13 @@ func (pm *ProtocolManager) GetBlockBodiesMsg(msg p2p.Msg, p *peer) error {
 			continue
 		}
 
-		data, err := json.Marshal(txs)
+		data, err := rlp.EncodeToBytes(txs)
 		if err != nil {
 			log.Debug("Get body Marshal encode", "error", err.Error(), "unit hash", hash.String())
 			//return errResp(ErrDecode, "msg %v: %v", msg, err)
 			continue
 		}
-		log.Debug("Get body Marshal", "data:", string(data))
+		//log.Debug("Get body Marshal", "data:", string(data))
 		bytes += len(data)
 		bodies = append(bodies, data)
 	}
@@ -244,31 +248,27 @@ func (pm *ProtocolManager) BlockBodiesMsg(msg p2p.Msg, p *peer) error {
 		return errResp(ErrDecode, "msg %v: %v", msg, err)
 	}
 
-	//log.Debug("===BlockBodiesMsg===", "len(request:)", len(request))
 	transactions := make([][]*modules.Transaction, len(request))
 	for i, body := range request {
 		if len(body) == 0 {
 			continue
 		}
 		var txs modules.Transactions
-		//log.Debug("BlockBodiesMsg", "have body:", string(body))
-		if err := json.Unmarshal(body, &txs); err != nil {
-			log.Debug("have body Unmarshal encode", "error", err.Error(), "body", string(body))
+		if err := rlp.DecodeBytes(body, &txs); err != nil {
+			log.Debug("have body rlp decode", "error", err.Error(), "body", string(body))
 			return errResp(ErrDecode, "msg %v: %v", msg, err)
 		}
 
 		transactions[i] = txs
 		log.Debug("BlockBodiesMsg", "i", i, "txs size:", len(txs))
 	}
-	log.Debug("===BlockBodiesMsg===", "len(transactions:)", len(transactions))
+	log.Debug("Full ProtocolManager BlockBodiesMsg", "len(transactions:)", len(transactions))
 	// Filter out any explicitly requested bodies, deliver the rest to the downloader
 	filter := len(transactions) > 0
 	if filter {
-		log.Debug("===BlockBodiesMsg->FilterBodies===")
 		transactions = pm.fetcher.FilterBodies(p.id, transactions, time.Now())
 	}
 	if len(transactions) > 0 || !filter {
-		log.Debug("===BlockBodiesMsg->DeliverBodies===")
 		err := pm.downloader.DeliverBodies(p.id, transactions)
 		if err != nil {
 			log.Debug("Failed to deliver bodies", "err", err.Error())
@@ -319,10 +319,10 @@ func (pm *ProtocolManager) NodeDataMsg(msg p2p.Msg, p *peer) error {
 }
 
 func (pm *ProtocolManager) NewBlockHashesMsg(msg p2p.Msg, p *peer) error {
-	log.Debug("===NewBlockHashesMsg===")
+	log.Debug("Enter Full ProtocolManager NewBlockHashesMsg")
+	defer log.Debug("End Full ProtocolManager NewBlockHashesMsg")
 	var announces newBlockHashesData
 	if err := msg.Decode(&announces); err != nil {
-		log.Debug("===NewBlockHashesMsg===", "Decode err:", err)
 		return errResp(ErrDecode, "%v: %v", msg, err)
 	}
 	// Mark the hashes as present at the remote node
@@ -336,7 +336,7 @@ func (pm *ProtocolManager) NewBlockHashesMsg(msg p2p.Msg, p *peer) error {
 			unknown = append(unknown, block)
 		}
 	}
-	log.Debug("===NewBlockHashesMsg===", "len(unknown):", len(unknown))
+	log.Debug("Full ProtocolManager NewBlockHashesMsg", "len(unknown):", len(unknown))
 	for _, block := range unknown {
 		pm.fetcher.Notify(p.id, block.Hash, &block.Number, time.Now(), p.RequestOneHeader, p.RequestBodies)
 	}
@@ -353,56 +353,90 @@ func (pm *ProtocolManager) NewBlockMsg(msg p2p.Msg, p *peer) error {
 	}
 
 	unit := &modules.Unit{}
-	if err := json.Unmarshal(data, &unit); err != nil {
-		log.Info("ProtocolManager", "NewBlockMsg json ummarshal err:", err, "data", string(data))
+	if err := rlp.DecodeBytes(data, &unit); err != nil {
+		log.Info("ProtocolManager", "NewBlockMsg rlp decode err:", err, "data", string(data))
 		return err
 	}
 
-	timestamp := time.Unix(unit.Timestamp(), 0)
-	log.Infof("Received unit(%v) #%v parent(%v) @%v signed by %v", unit.UnitHash.TerminalString(),
-		unit.NumberU64(), unit.ParentHash()[0].TerminalString(), timestamp.Format("2006-01-02 15:04:05"),
-		unit.Author().Str())
+	if unit.IsEmpty() {
+		log.Errorf("unit is nil/empty")
+		return nil
+	}
 
-	latency := time.Now().Sub(timestamp)
-	if latency < -3*time.Second {
+	// append by Albert·Gou
+	timestamp := time.Unix(unit.Timestamp(), 0)
+	//latency := time.Now().Sub(timestamp)
+	latency := time.Since(timestamp)
+	if latency < -5*time.Second {
 		errStr := fmt.Sprintf("Rejecting unit #%v with timestamp(%v) in the future signed by %v",
 			unit.NumberU64(), timestamp.Format("2006-01-02 15:04:05"), unit.Author().Str())
 		log.Debugf(errStr)
 		return fmt.Errorf(errStr)
 	}
 
+	unitHash := unit.Hash()
+	if pm.IsExistInCache(unitHash.Bytes()) {
+		//log.Debugf("Received unit(%v) again, ignore it", unitHash.TerminalString())
+		p.MarkUnit(unitHash)
+		p.SetHead(unitHash, unit.Number(), nil)
+		return nil
+	}
+
+	log.Infof("Received unit(%v) #%v parent(%v) @%v signed by %v", unitHash.TerminalString(),
+		unit.NumberU64(), unit.ParentHash()[0].TerminalString(), timestamp.Format("2006-01-02 15:04:05"),
+		unit.Author().Str())
+
+	log.DebugDynamic(func() string {
+		txids := []common.Hash{}
+		for _, tx := range unit.Txs {
+			txids = append(txids, tx.Hash())
+		}
+		return fmt.Sprintf("NewBlockMsg, received unit hash %s, txs:[%x]", unit.UnitHash.String(), txids)
+	})
+
+	rwset.Init()
 	var temptxs modules.Transactions
-	for _, tx := range unit.Txs {
+	index := 0
+	for i, tx := range unit.Txs {
+		if i == 0 {
+			temptxs = append(temptxs, tx)
+			continue //coinbase
+		}
 		if tx.IsContractTx() {
-			if !pm.contractProc.CheckContractTxValid(tx, true) {
-				log.Debug("NewBlockMsg,CheckContractTxValid is false.", "reqHash", tx.RequestHash().String())
-				//return errResp(ErrDecode, "Contract transaction valid check fail, reqId %v", tx.RequestHash().String())
+			reqId := tx.RequestHash()
+			log.Debugf("[%s]NewBlockMsg, index[%x],txHash[%s]", reqId.String()[0:8], index, tx.Hash().String())
+			index++
+			if !pm.contractProc.CheckContractTxValid(rwset.RwM, tx, true) {
+				log.Debugf("[%s]NewBlockMsg, CheckContractTxValid is false.", reqId.String()[0:8])
 				continue
 			}
 		}
 		temptxs = append(temptxs, tx)
 	}
+	rwset.RwM.Close()
 	unit.Txs = temptxs
 
 	unit.ReceivedAt = msg.ReceivedAt
 	unit.ReceivedFrom = p
-	//log.Debug("===NewBlockMsg===", "peer id:", p.id, "index:", unit.Number().Index, "unit:", *unit)
 
 	// Mark the peer as owning the block and schedule it for import
 	p.MarkUnit(unit.UnitHash)
 	pm.fetcher.Enqueue(p.id, unit)
 
-	requestNumber := unit.UnitHeader.Number
+	requestNumber := unit.Number()
 	hash, number := p.Head(unit.Number().AssetID)
 	if common.EmptyHash(hash) || (!common.EmptyHash(hash) && requestNumber.Index > number.Index) {
-		log.Debug("ProtocolManager", "NewBlockMsg SetHead request.Index:", requestNumber.Index, "local peer index:", number.Index)
-		p.SetHead(unit.Hash(), requestNumber)
+		log.Debug("ProtocolManager", "NewBlockMsg SetHead request.Index:", requestNumber.Index,
+			"local peer index:", number.Index)
+		p.SetHead(unit.Hash(), requestNumber, nil)
 
-		currentUnitIndex := pm.dag.GetCurrentUnit(unit.Number().AssetID).UnitHeader.Number.Index
+		//currentUnitIndex := pm.dag.GetCurrentUnit(unit.Number().AssetID).UnitHeader.Number.Index
+		currentUnitIndex := pm.dag.HeadUnitNum()
 		if requestNumber.Index > currentUnitIndex+1 {
-			log.Debug("ProtocolManager", "NewBlockMsg synchronise request.Index:", requestNumber.Index, "current unit index+1:", currentUnitIndex+1)
+			log.Debug("ProtocolManager", "NewBlockMsg synchronize request.Index:", requestNumber.Index,
+				"current unit index+1:", currentUnitIndex+1)
 			go func() {
-				pm.synchronise(p, unit.Number().AssetID)
+				pm.synchronize(p, unit.Number().AssetID, nil)
 			}()
 		}
 	}
@@ -423,100 +457,80 @@ func (pm *ProtocolManager) TxMsg(msg p2p.Msg, p *peer) error {
 		log.Debug("ProtocolManager handlmsg TxMsg", "Decode err:", err, "msg:", msg)
 		return errResp(ErrDecode, "msg %v: %v", msg, err)
 	}
-	//TODO VerifyTX
-	log.Debug("===============ProtocolManager", "TxMsg txs:", txs)
 	for i, tx := range txs {
 		// Validate and mark the remote transaction
 		if tx == nil {
 			return errResp(ErrDecode, "transaction %d is nil", i)
 		}
-
+		txHash := tx.Hash()
+		if pm.IsExistInCache(txHash.Bytes()) {
+			return nil
+		}
 		if tx.IsContractTx() {
 			if pm.contractProc.IsSystemContractTx(tx) {
 				continue
 			}
 		}
-		// @Jay ---> 同步过来的交易 p2p层不需要做交易的验证。
 		p.MarkTransaction(tx.Hash())
 		_, err := pm.txpool.ProcessTransaction(tx, true, true, 0 /*pm.txpool.Tag(peer.ID())*/)
 		if err != nil {
 			log.Infof("the transaction %s not accepteable, err:%s", tx.Hash().String(), err.Error())
-			continue
-			//return errResp(ErrDecode, "transaction %d not accepteable ", i, "err:", err)
 		}
-		pm.txpool.AddRemote(tx)
-	}
-	log.Debug("===============ProtocolManager TxMsg AddRemote====================")
-
-	return nil
-}
-
-// todo 待合并 NewBlockMsg
-func (pm *ProtocolManager) NewProducedUnitMsg(msg p2p.Msg, p *peer) error {
-	// Retrieve and decode the propagated new produced unit
-	data := []byte{}
-	if err := msg.Decode(&data); err != nil {
-		log.Debug("ProtocolManager", "NewProducedUnitMsg msg:", msg.String())
-		return errResp(ErrDecode, "%v: %v", msg, err)
 	}
 
-	var unit modules.Unit
-	if err := json.Unmarshal(data, &unit); err != nil {
-		log.Debug("ProtocolManager", "NewProducedUnitMsg json ummarshal err:", err)
-		return err
-	}
-
-	timestamp := time.Unix(unit.Timestamp(), 0)
-	latency := time.Now().Sub(timestamp)
-	if latency < -3*time.Second {
-		errStr := fmt.Sprintf("Rejecting unit #%v with timestamp(%v) in the future signed by %v",
-			unit.NumberU64(), timestamp.Format("2006-01-02 15:04:05"), unit.Author().Str())
-		log.Debugf(errStr)
-		return fmt.Errorf(errStr)
-	}
-
-	pm.producer.AddToTBLSSignBufs(&unit)
 	return nil
 }
 
 func (pm *ProtocolManager) SigShareMsg(msg p2p.Msg, p *peer) error {
 	var sigShare mp.SigShareEvent
 	if err := msg.Decode(&sigShare); err != nil {
-		log.Info("===SigShareMsg===", "err:", err)
-		return errResp(ErrDecode, "%v: %v", msg, err)
+		errStr := fmt.Sprintf("SigShareMsg: %v, err: %v", msg, err)
+		log.Debugf(errStr)
+
+		//return fmt.Errorf(errStr)
+		return nil
 	}
+
 	pm.producer.AddToTBLSRecoverBuf(sigShare.UnitHash, sigShare.SigShare)
 	return nil
 }
 
 func (pm *ProtocolManager) VSSDealMsg(msg p2p.Msg, p *peer) error {
-	// comment by Albert·Gou
-	//var vssmsg vssMsg
-	//if err := msg.Decode(&vssmsg); err != nil {
-
 	var deal mp.VSSDealEvent
 	if err := msg.Decode(&deal); err != nil {
-		log.Info("===VSSDealMsg===", "err:", err)
-		return errResp(ErrDecode, "%v: %v", msg, err)
-	}
-	pm.producer.ProcessVSSDeal(&deal)
+		errStr := fmt.Sprintf("VSSDealMsg: %v, err: %v", msg, err)
+		log.Debugf(errStr)
 
-	// comment by Albert·Gou
-	////TODO vssmark
-	//if !pm.peers.PeersWithoutVss(vssmsg.NodeId) {
-	//	pm.producer.ProcessVSSDeal(vssmsg.Deal)
-	//	pm.peers.MarkVss(vssmsg.NodeId)
-	//	pm.BroadcastVss(vssmsg.NodeId, vssmsg.Deal)
-	//}
+		//return fmt.Errorf(errStr)
+		return nil
+	}
+
+	// 判断是否同步, 如果没同步完成，接收到的vss deal是超前的
+	if !pm.dag.IsSynced() {
+		errStr := "we are not synced"
+		log.Debugf(errStr)
+		//return fmt.Errorf(errStr)
+		return nil
+	}
+
+	// todo albert 清除在限制时间范围之外的deal消息
+
+	go pm.producer.AddToDealBuf(&deal)
 	return nil
 }
 
 func (pm *ProtocolManager) VSSResponseMsg(msg p2p.Msg, p *peer) error {
 	var resp mp.VSSResponseEvent
 	if err := msg.Decode(&resp); err != nil {
-		log.Info("===VSSResponseMsg===", "err:", err)
-		return errResp(ErrDecode, "%v: %v", msg, err)
+		errStr := fmt.Sprintf("VSSResponseMsg: %v, err: %v", msg, err)
+		log.Debugf(errStr)
+
+		//return fmt.Errorf(errStr)
+		return nil
 	}
+
+	// todo albert 清除在限制时间范围之外的response消息
+
 	go pm.producer.AddToResponseBuf(&resp)
 	return nil
 }
@@ -525,23 +539,33 @@ func (pm *ProtocolManager) VSSResponseMsg(msg p2p.Msg, p *peer) error {
 func (pm *ProtocolManager) GroupSigMsg(msg p2p.Msg, p *peer) error {
 	var gSign mp.GroupSigEvent
 	if err := msg.Decode(&gSign); err != nil {
-		log.Info("===GroupSigMsg===", "err:", err)
-		return errResp(ErrDecode, "%v: %v", msg, err)
+		errStr := fmt.Sprintf("GroupSigMsg: %v, err: %v", msg, err)
+		log.Debugf(errStr)
+
+		//return fmt.Errorf(errStr)
+		return nil
 	}
-	pm.dag.SetUnitGroupSign(gSign.UnitHash, gSign.GroupSig, pm.txpool)
+
+	go pm.dag.SetUnitGroupSign(gSign.UnitHash, gSign.GroupSig, pm.txpool)
 	return nil
 }
 
 func (pm *ProtocolManager) ContractMsg(msg p2p.Msg, p *peer) error {
 	var event jury.ContractEvent
 	if err := msg.Decode(&event); err != nil {
-		log.Info("===ContractMsg===", "err:", err)
+		log.Info("ProtocolManager ContractMsg", "err:", err)
 		return errResp(ErrDecode, "%v: %v", msg, err)
 	}
-	log.Info("===ContractMsg===", "event type:", event.CType)
+	if pm.IsExistInCache(event.Hash().Bytes()) {
+		//log.Debugf("Received event(%v) again, ignore it", event.Hash().String())
+		return nil
+	}
+
+	reqId := event.Tx.RequestHash()
+	log.Debugf("[%s] ProtocolManager ContractMsg, event type[%v]", reqId.String()[0:8], event.CType)
 	err := pm.contractProc.ProcessContractEvent(&event)
 	if err != nil {
-		log.Debug("ContractMsg", "error:", err)
+		log.Debugf("[%s]ProtocolManager ContractMsg, error:%s", reqId.String()[0:8], err.Error())
 	}
 	return nil
 }
@@ -552,42 +576,38 @@ func (pm *ProtocolManager) ElectionMsg(msg p2p.Msg, p *peer) error {
 		log.Info("===ElectionMsg===", "err:", err)
 		return errResp(ErrDecode, "%v: %v", msg, err)
 	}
-	//log.Info("===ElectionMsg===", "event ", evs)
+	if pm.IsExistInCache(evs.Hash().Bytes()) {
+		return nil
+	}
 	event, err := evs.ToElectionEvent()
 	if err != nil {
 		log.Debug("ElectionMsg, ToElectionEvent fail")
 		return nil
 	}
-	result, err := pm.contractProc.ProcessElectionEvent(event)
+	_, err = pm.contractProc.ProcessElectionEvent(event)
 	if err != nil {
 		log.Debug("ElectionMsg", "ProcessElectionEvent error:", err)
-	} else {
-		if event.EType == jury.ELECTION_EVENT_REQUEST {
-			if result != nil {
-				p.SendElectionEvent(*result)
-			}
-		}
 	}
+
 	return nil
 }
 
 func (pm *ProtocolManager) AdapterMsg(msg p2p.Msg, p *peer) error {
 	var avs jury.AdapterEventBytes
 	if err := msg.Decode(&avs); err != nil {
-		log.Info("===AdapterMsg===", "err:", err)
+		log.Info("ProtocolManager AdapterMsg", "err:", err)
 		return errResp(ErrDecode, "%v: %v", msg, err)
 	}
-	log.Debug("===============ProtocolManager", "avs:", avs)
 
 	event, err := avs.ToAdapterEvent()
 	if err != nil {
-		log.Debug("AdapterMsg, ToAdapterEvent fail")
+		log.Debug("ProtocolManager AdapterMsg, ToAdapterEvent fail")
 		return nil
 	}
 
 	_, err = pm.contractProc.ProcessAdapterEvent(event)
 	if err != nil {
-		log.Debug("AdapterMsg", "ProcessAdapterEvent error:", err)
+		log.Debug("ProtocolManager AdapterMsg", "ProcessAdapterEvent error:", err)
 	}
 	return nil
 }
@@ -595,7 +615,7 @@ func (pm *ProtocolManager) AdapterMsg(msg p2p.Msg, p *peer) error {
 func (pm *ProtocolManager) GetLeafNodesMsg(msg p2p.Msg, p *peer) error {
 	headers, err := pm.dag.GetAllLeafNodes()
 	if err != nil {
-		log.Info("===GetLeafNodesMsg===", "err:", err)
+		log.Info("Full ProtocolManager GetLeafNodesMsg", "err:", err)
 		return errResp(ErrDecode, "%v: %v", msg, err)
 	}
 	return p.SendUnitHeaders(headers)

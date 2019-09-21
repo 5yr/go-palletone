@@ -39,7 +39,7 @@ import (
 )
 
 const (
-	testInstance = "console-tester"
+	testInstance = "console-tester JavaScript console"
 	testAddress  = "0x8605cdbbdb6d264aa742e77020dcbc58fcdce182"
 )
 
@@ -86,25 +86,25 @@ type tester struct {
 }
 
 func DevGenesisBlock() *core.Genesis {
-	SystemConfig := core.SystemConfig{
-		DepositRate: "0.02",
-	}
+	//SystemConfig := core.SystemConfig{
+	//	DepositRate: "0.02",
+	//}
 
 	initParams := core.NewChainParams()
 
 	return &core.Genesis{
-		Version:                "0.6.0",
-		TokenAmount:            "1000000000",
-		GasToken:               "PTN",
-		ChainID:                1,
-		TokenHolder:            core.DefaultTokenHolder,
-		InitialParameters:      initParams,
-		ImmutableParameters:    core.NewImmutChainParams(),
-		InitialTimestamp:       gen.InitialTimestamp(initParams.MediatorInterval),
-		InitialActiveMediators: core.DefaultMediatorCount,
-		InitialMediatorCandidates: gen.InitialMediatorCandidates(core.DefaultMediatorCount,
+		Version:             "0.6.0",
+		TokenAmount:         core.DefaultTokenAmount,
+		GasToken:            "PTN",
+		ChainID:             1,
+		TokenHolder:         core.DefaultTokenHolder,
+		InitialParameters:   initParams,
+		ImmutableParameters: core.NewImmutChainParams(),
+		InitialTimestamp:    gen.InitialTimestamp(initParams.MediatorInterval),
+		//InitialActiveMediators: core.DefaultMediatorCount,
+		InitialMediatorCandidates: gen.InitialMediatorCandidates(core.DefaultActiveMediatorCount,
 			core.DefaultMediator),
-		SystemConfig: SystemConfig,
+		//SystemConfig: SystemConfig,
 	}
 }
 
@@ -169,8 +169,14 @@ func newTester(t *testing.T, confOverride func(*ptn.Config)) *tester {
 		return nil
 	}
 
+	err = dag.InitStateDB(ptnConf.Genesis, unit)
+	if err != nil {
+		fmt.Printf("Failed to InitStateDB: %v", err)
+		return nil
+	}
+
 	db.Close()
-	if err = stack.Register(func(ctx *node.ServiceContext) (node.Service, error) { return ptn.New(ctx, ptnConf) }); err != nil {
+	if err = stack.Register(func(ctx *node.ServiceContext) (node.Service, error) { return ptn.New(ctx, ptnConf, stack.CacheDb) }); err != nil {
 		t.Fatalf("failed to register PalletOne protocol: %v", err)
 	}
 	// Start the node and assemble the JavaScript console around it

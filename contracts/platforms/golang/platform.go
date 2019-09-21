@@ -28,7 +28,7 @@ import (
 	"fmt"
 
 	"github.com/palletone/go-palletone/common/log"
-	cfg "github.com/palletone/go-palletone/contracts/contractcfg"
+	"github.com/palletone/go-palletone/contracts/contractcfg"
 	"github.com/palletone/go-palletone/contracts/platforms/util"
 	ccmetadata "github.com/palletone/go-palletone/core/vmContractPub/ccprovider/metadata"
 	"github.com/palletone/go-palletone/core/vmContractPub/metadata"
@@ -85,10 +85,12 @@ func decodeUrl(spec *pb.ChaincodeSpec) (string, error) {
 func getGopath() (string, error) {
 	env, err := getGoEnv()
 	if err != nil {
+		log.Debugf("get go env error: %s", err.Error())
 		return "", err
 	}
 	// Only take the first element of GOPATH
-	splitGoPath := make([]string, 0)
+	//splitGoPath := make([]string, 0)
+	var splitGoPath []string
 	os := runtime.GOOS
 	if os == "windows" {
 		splitGoPath = filepath.SplitList(env["set GOPATH"])
@@ -99,6 +101,7 @@ func getGopath() (string, error) {
 	if len(splitGoPath) == 0 {
 		return "", fmt.Errorf("invalid GOPATH environment variable value:[%s]", env["GOPATH"])
 	}
+	log.Debugf("go path %s", splitGoPath[0])
 	return splitGoPath[0], nil
 }
 
@@ -240,13 +243,13 @@ func vendorDependencies(pkg string, files Sources) {
 			excluded := false
 
 			for _, exclusion := range exclusions {
-				if strings.HasPrefix(file.Name, exclusion) == true {
+				if strings.HasPrefix(file.Name, exclusion) {
 					excluded = true
 					break
 				}
 			}
 
-			if excluded == false {
+			if !excluded {
 				origName := file.Name
 				file.Name = strings.Replace(origName, "src", vendorPath, 1)
 				//glh
@@ -266,7 +269,8 @@ func vendorDependencies(pkg string, files Sources) {
 func (goPlatform *Platform) GetChainCodePayload(spec *pb.ChaincodeSpec) ([]byte, error) {
 	log.Info("GetChainCodePayload enter")
 	defer log.Info("GetChainCodePayload exit")
-	codeDescriptor, err := getCodeDescriptor(spec) //获取codeDescriptor，即构造CodeDescriptor，Gopath为go环境gopath路径，Pkg为代码相对路径
+	//获取codeDescriptor，即构造CodeDescriptor，Gopath为go环境gopath路径，Pkg为代码相对路径
+	codeDescriptor, err := getCodeDescriptor(spec)
 	if err != nil {
 		log.Info("getCodeDescriptor err:", "error", err)
 		return nil, err
@@ -277,10 +281,18 @@ func (goPlatform *Platform) GetChainCodePayload(spec *pb.ChaincodeSpec) ([]byte,
 	chaincodeVendorDir := tld + PthSep + "vendor"
 	cl := len(chaincodeVendorDir)
 	chaincodeVendorDirs, err := getAllDirs(chaincodeVendorDir)
+	if err != nil {
+		log.Debugf("get all dirs err %s", err.Error())
+		//return nil, err
+	}
 	//获取项目vendor的所有文件夹
 	ploDir := filepath.Join(codeDescriptor.Gopath, "src", "github.com/palletone/go-palletone/vendor")
 	pl := len(ploDir)
 	pVendorDirs, err := getAllDirs(ploDir)
+	if err != nil {
+		log.Debugf("get all dirs err %s", err.Error())
+		//return nil, err
+	}
 	newFiles := []string{}
 	for _, cDir := range chaincodeVendorDirs {
 		pIsHave := false
@@ -330,8 +342,8 @@ func (goPlatform *Platform) GetChainCodePayload(spec *pb.ChaincodeSpec) ([]byte,
 	}
 	tw.Close()
 	gw.Close()
-	//gopath,_ := getGopath()
-	//ioutil.WriteFile(gopath+"/lala.tar.gz",payload.Bytes(),0644)
+	//gopath, _ := getGopath()
+	//ioutil.WriteFile(gopath+"/lala.tar.gz", payload.Bytes(), 0644)
 	return payload.Bytes(), nil
 }
 
@@ -396,9 +408,9 @@ func getAllFiles(dirPth string) ([]SourceFile, error) {
 	// 读取子目录下文件
 	for _, table := range dirs {
 		temp, _ := getAllFiles(table)
-		for _, temp1 := range temp {
-			sourcefiles = append(sourcefiles, temp1)
-		}
+		//for _, temp1 := range temp {
+		sourcefiles = append(sourcefiles, temp...)
+		//}
 	}
 	return sourcefiles, nil
 }
@@ -460,13 +472,13 @@ func (goPlatform *Platform) GetDeploymentPayload(spec *pb.ChaincodeSpec) ([]byte
 
 	imports = filter(imports, func(pkg string) bool {
 		// Drop if provided by CCENV
-		if _, ok := provided[pkg]; ok == true { //从导入包中删除ccenv已自带的包
+		if _, ok := provided[pkg]; ok { //从导入包中删除ccenv已自带的包
 			log.Debugf("Discarding provided package %s", pkg)
 			return false
 		}
 
 		// Drop pseudo-packages
-		if _, ok := pseudo[pkg]; ok == true {
+		if _, ok := pseudo[pkg]; ok {
 			log.Debugf("Discarding pseudo-package %s", pkg)
 			return false
 		}
@@ -641,7 +653,8 @@ func (goPlatform *Platform) GenerateDockerfile(cds *pb.ChaincodeDeploymentSpec) 
 	var buf []string
 	//glh
 	//buf = append(buf, "FROM "+"palletimg")
-	buf = append(buf, "FROM "+cfg.GetConfig().ContractBuilder)
+
+	buf = append(buf, "FROM "+contractcfg.Goimg+":"+contractcfg.GptnVersion)
 	//buf = append(buf, "ADD binpackage.tar /usr/local/bin")
 
 	dockerFileContents := strings.Join(buf, "\n")
@@ -679,15 +692,16 @@ func (goPlatform *Platform) GenerateDockerBuild(cds *pb.ChaincodeDeploymentSpec,
 
 	codepackage := bytes.NewReader(cds.CodePackage)
 	binpackage := bytes.NewBuffer(nil)
-
 	err = util.DockerBuild(util.DockerBuildOptions{
-		Cmd: fmt.Sprintf("GOPATH=/chaincode/input:$GOPATH go build -tags \"%s\" %s -o /chaincode/output/chaincode %s", gotags, ldflagsOpt, pkgname),
+		//Cmd: fmt.Sprintf("GOPATH=$GOPATH:/chaincode/input go build -tags \"%s\" %s -o /chaincode/output/chaincode %s", gotags, ldflagsOpt, pkgname),
+		Cmd: fmt.Sprintf("GOPATH=$GOPATH:/chaincode/input go build -ldflags \"-s -w\" -o /chaincode/output/chaincode %s", pkgname),
 		//Cmd:          fmt.Sprintf("GOPATH=/chaincode/input:\"/home/glh/go\" go build -tags \"%s\" %s -o /chaincode/output/chaincode %s", gotags, ldflagsOpt, pkgname),
 		InputStream:  codepackage,
 		OutputStream: binpackage,
+		Image:        contractcfg.Goimg + ":" + contractcfg.GptnVersion,
 	})
 	if err != nil {
-		log.Errorf("DockerBuild err:%s", err)
+		log.Debugf("DockerBuild err:%s", err)
 		return err
 	}
 

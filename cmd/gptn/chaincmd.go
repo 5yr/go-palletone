@@ -28,8 +28,8 @@ import (
 	"github.com/palletone/go-palletone/core/gen"
 	"github.com/palletone/go-palletone/dag"
 	"github.com/palletone/go-palletone/dag/dagconfig"
-	//"github.com/palletone/go-palletone/dag/modules"
-	// "github.com/palletone/go-palletone/dag/txspool"
+	"github.com/palletone/go-palletone/dag/modules"
+
 	"gopkg.in/urfave/cli.v1"
 )
 
@@ -121,7 +121,7 @@ func initGenesis(ctx *cli.Context) error {
 	}
 	dag, _ := dag.NewDag4GenesisInit(Dbconn)
 	ks := node.GetKeyStore()
-	account, password := unlockAccount(nil, ks, genesis.TokenHolder, 0, nil)
+	account, password := unlockAccount(ks, genesis.TokenHolder, 0, nil)
 
 	err = ks.Unlock(account, password)
 	if err != nil {
@@ -145,28 +145,28 @@ func initGenesis(ctx *cli.Context) error {
 		fmt.Println("Save Genesis unit to db error:", err)
 		return err
 	}
-	// @jay
-	// asset 存入数据库中
-	// dag.SaveCommon(key,asset)   key=[]byte(modules.FIELD_GENESIS_ASSET)
-	//chainIndex := unit.UnitHeader.ChainIndex()
-	//if err := dag.SaveChainIndex(chainIndex); err != nil {
-	//	log.Info("save chain index is failed.", "error", err)
-	//} else {
-	//token_info := modules.NewTokenInfo("ptncoin", "ptn", "creator_jay")
-	//idhex, _ := dag.SaveTokenInfo(token_info)
-	//log.Info("save chain index is success.", "idhex", idhex)
-	//}
 
-	genesisUnitHash := unit.UnitHash
-	log.Info(fmt.Sprintf("Successfully Get Genesis Unit, it's hash: %v", genesisUnitHash.Hex()))
+	// 初始化 stateDB
+	// append by albert·gou
+	err = dag.InitStateDB(genesis, unit)
+	if err != nil {
+		utils.Fatalf("Failed to InitStateDB: %v", err)
+		return err
+	}
 
 	// 初始化属性数据库
-	//modified by Yiran
+	// modified by Yiran
 	err = dag.InitPropertyDB(genesis, unit)
 	if err != nil {
 		utils.Fatalf("Failed to InitPropertyDB: %v", err)
 		return err
 	}
+	dv := new(modules.DataVersion)
+	dv.Name = "Gptn"
+	dv.Version = genesis.Version
+	dag.StoreDataVersion(dv)
 
+	//MUST DO NOT MODIFY THIS LOG. For deploy.sh
+	log.Infof("gptn (version[%s] hash[%s]) init success", dv.Version, unit.UnitHash.Hex())
 	return nil
 }

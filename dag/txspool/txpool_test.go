@@ -28,12 +28,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coocood/freecache"
 	"github.com/palletone/go-palletone/common"
 	"github.com/palletone/go-palletone/common/event"
 	"github.com/palletone/go-palletone/common/log"
 	palletdb "github.com/palletone/go-palletone/common/ptndb"
-	"github.com/palletone/go-palletone/dag/dagconfig"
+	"github.com/palletone/go-palletone/core"
 	"github.com/palletone/go-palletone/dag/modules"
+	"github.com/palletone/go-palletone/dag/parameter"
 	"github.com/palletone/go-palletone/dag/storage"
 	"github.com/palletone/go-palletone/tokenengine"
 )
@@ -59,13 +61,12 @@ type UnitDag4Test struct {
 func NewTxPool4Test() *TxPool {
 	//l := log.NewTestLog()
 	testDag := NewUnitDag4Test()
-	return NewTxPool(testTxPoolConfig, testDag)
+	return NewTxPool(testTxPoolConfig, freecache.NewCache(1*1024*1024), testDag, tokenengine.Instance)
 }
 
 func NewUnitDag4Test() *UnitDag4Test {
 	db, _ := palletdb.NewMemDatabase()
-	utxodb := storage.NewUtxoDb(db)
-	//idagdb := storage.NewDagDb(db)
+	utxodb := storage.NewUtxoDb(db, tokenengine.Instance)
 
 	propdb := storage.NewPropertyDb(db)
 	hash := common.HexToHash("0x0e7e7e3bd7c1e9ce440089712d61de38f925eb039f152ae03c6688ed714af729")
@@ -73,12 +74,12 @@ func NewUnitDag4Test() *UnitDag4Test {
 	h := modules.NewHeader([]common.Hash{hash}, uint64(1), []byte("hello"))
 	h.Number = idx
 	propdb.SetNewestUnit(h)
-	//idagdb.PutHeadUnitHash()
 	mutex := new(sync.RWMutex)
 
 	ud := &UnitDag4Test{db, utxodb, *mutex, nil, 10000, new(event.Feed), make(map[string]map[modules.OutPoint]*modules.Utxo)}
 	return ud
 }
+
 func (ud *UnitDag4Test) CurrentUnit(token modules.AssetId) *modules.Unit {
 	return modules.NewUnit(&modules.Header{
 		Number: &modules.ChainIndex{AssetID: token},
@@ -90,14 +91,38 @@ func (ud *UnitDag4Test) GetUnitByHash(hash common.Hash) (*modules.Unit, error) {
 	return ud.CurrentUnit(modules.PTNCOIN), nil
 }
 
+func (q *UnitDag4Test) GetMediators() map[common.Address]bool {
+	return nil
+}
+
+func (q *UnitDag4Test) GetSlotAtTime(when time.Time) uint32 {
+	return 0
+}
+
+func (q *UnitDag4Test) GetMediator(add common.Address) *core.Mediator {
+	return nil
+}
+
+func (q *UnitDag4Test) GetScheduledMediator(slotNum uint32) common.Address {
+	return common.Address{}
+}
+
+func (q *UnitDag4Test) GetNewestUnitTimestamp(token modules.AssetId) (int64, error) {
+	return 0, nil
+}
+
+func (q *UnitDag4Test) GetChainParameters() *core.ChainParameters {
+	return nil
+}
+
 func (ud *UnitDag4Test) StateAt(common.Hash) (*palletdb.MemDatabase, error) {
 	return ud.Db, nil
 }
 func (ud *UnitDag4Test) GetHeaderByHash(common.Hash) (*modules.Header, error) {
 	return nil, nil
 }
-func (ud *UnitDag4Test) IsTransactionExist(hash common.Hash) bool {
-	return false
+func (ud *UnitDag4Test) IsTransactionExist(hash common.Hash) (bool, error) {
+	return false, nil
 }
 func (ud *UnitDag4Test) GetUtxoEntry(outpoint *modules.OutPoint) (*modules.Utxo, error) {
 	if ud.outpoints == nil {
@@ -112,7 +137,9 @@ func (ud *UnitDag4Test) GetUtxoEntry(outpoint *modules.OutPoint) (*modules.Utxo,
 	}
 	return nil, fmt.Errorf("not found!")
 }
-
+func (ud *UnitDag4Test) GetStxoEntry(outpoint *modules.OutPoint) (*modules.Stxo, error) {
+	return nil, nil
+}
 func (ud *UnitDag4Test) GetUtxoView(tx *modules.Transaction) (*UtxoViewpoint, error) {
 	neededSet := make(map[modules.OutPoint]struct{})
 	preout := modules.OutPoint{TxHash: tx.Hash()}
@@ -158,6 +185,27 @@ func (ud *UnitDag4Test) GetTransactionOnly(hash common.Hash) (*modules.Transacti
 	return nil, nil
 }
 
+func (ud *UnitDag4Test) GetContractTpl(tplId []byte) (*modules.ContractTemplate, error) {
+	return nil, nil
+}
+func (ud *UnitDag4Test) GetBlacklistAddress() ([]common.Address, *modules.StateVersion, error){
+	return []common.Address{},nil,nil
+}
+
+func (ud *UnitDag4Test) GetMinFee() (*modules.AmountAsset, error) {
+	return nil, nil
+}
+
+func (ud *UnitDag4Test) GetContractJury(contractId []byte) (*modules.ElectionNode, error) {
+	return nil, nil
+}
+func (ud *UnitDag4Test) GetContractState(id []byte, field string) ([]byte, *modules.StateVersion, error) {
+	return nil, nil, nil
+}
+func (ud *UnitDag4Test) GetContractStatesByPrefix(id []byte, prefix string) (map[string]*modules.ContractStateValue, error) {
+	return nil, nil
+}
+
 // create txs
 func createTxs(address string) []*modules.Transaction {
 	txs := make([]*modules.Transaction, 0)
@@ -167,14 +215,27 @@ func createTxs(address string) []*modules.Transaction {
 	unlockScript := tokenengine.GenerateP2PKHUnlockScript(sign, pubKey)
 	a := modules.NewPTNAsset()
 	addr, _ := common.StringToAddress(address)
-	lockScript := tokenengine.GenerateLockScript(addr)
+	lockScript := tokenengine.Instance.GenerateLockScript(addr)
 	for j := 0; j < 16; j++ {
 		tx := modules.NewTransaction([]*modules.Message{})
-		tx.AddMessage(modules.NewMessage(modules.APP_PAYMENT, modules.NewPaymentPayload([]*modules.Input{modules.NewTxIn(modules.NewOutPoint(common.Hash{}, 0, 0), unlockScript)},
-			[]*modules.Output{modules.NewTxOut(uint64(j+1), lockScript, a)})))
+		output := modules.NewTxOut(uint64(j+10), lockScript, a)
+		tx.AddMessage(modules.NewMessage(modules.APP_PAYMENT, modules.NewPaymentPayload([]*modules.Input{modules.NewTxIn(modules.NewOutPoint(common.NewSelfHash(),
+			0, 0), unlockScript)}, []*modules.Output{output})))
 		txs = append(txs, tx)
 	}
 	return txs
+}
+func mockPtnUtxos() map[modules.OutPoint]*modules.Utxo {
+	result := map[modules.OutPoint]*modules.Utxo{}
+	p1 := modules.NewOutPoint(common.NewSelfHash(), 0, 0)
+	asset1 := &modules.Asset{AssetId: modules.PTNCOIN}
+	utxo1 := &modules.Utxo{Asset: asset1, Amount: 100, LockTime: 0}
+	utxo2 := &modules.Utxo{Asset: asset1, Amount: 200, LockTime: 0}
+
+	result[*p1] = utxo1
+	p2 := modules.NewOutPoint(common.NewSelfHash(), 1, 0)
+	result[*p2] = utxo2
+	return result
 }
 
 // Tests that if the transaction count belonging to multiple accounts go above
@@ -187,13 +248,18 @@ func TestTransactionAddingTxs(t *testing.T) {
 
 	// Create the pool to test the limit enforcement with
 	db, _ := palletdb.NewMemDatabase()
-	utxodb := storage.NewUtxoDb(db)
+	utxodb := storage.NewUtxoDb(db, tokenengine.Instance)
 	mutex := new(sync.RWMutex)
 	unitchain := &UnitDag4Test{db, utxodb, *mutex, nil, 10000, new(event.Feed), nil}
-	config := testTxPoolConfig
+	config := DefaultTxPoolConfig
 	config.GlobalSlots = 4096
 
-	pool := NewTxPool(config, unitchain)
+	utxos := mockPtnUtxos()
+	for outpoint, utxo := range utxos {
+		utxodb.SaveUtxoEntity(&outpoint, utxo)
+	}
+
+	pool := NewTxPool(config, freecache.NewCache(1*1024*1024), unitchain, tokenengine.Instance)
 	defer pool.Stop()
 
 	var pending_cache, queue_cache, all, origin int
@@ -201,7 +267,6 @@ func TestTransactionAddingTxs(t *testing.T) {
 	txs := createTxs(address)
 	fmt.Println("range txs start...  , spent time:", time.Since(t0))
 	// Import the batch and verify that limits have been enforced
-	//	pool.AddRemotes(txs)
 	for i, tx := range txs {
 		if txs[i].Size() > 0 {
 			continue
@@ -215,9 +280,7 @@ func TestTransactionAddingTxs(t *testing.T) {
 	pool_tx := new(modules.TxPoolTransaction)
 
 	for i, tx := range txs {
-		p_tx := TxtoTxpoolTx(pool, tx)
-		p_tx.GetTxFee()
-		p_tx.TxFee = &modules.AmountAsset{Amount: 20, Asset: tx.Asset()}
+		p_tx := TxtoTxpoolTx(tx)
 		txpool_txs = append(txpool_txs, p_tx)
 		if i == len(txs)-1 {
 			pool_tx = p_tx
@@ -226,7 +289,7 @@ func TestTransactionAddingTxs(t *testing.T) {
 
 	t1 := time.Now()
 	fmt.Println("addlocals start.... ", t1)
-	pool.AddLocals(txpool_txs)
+	pool.AddLocals(txs)
 	pendingTxs, _ := pool.pending()
 	pending := 0
 	p_txs := make([]*modules.TxPoolTransaction, 0)
@@ -249,7 +312,7 @@ func TestTransactionAddingTxs(t *testing.T) {
 	//  test GetSortedTxs{}
 	unit_hash := common.HexToHash("0x0e7e7e3bd7c1e9ce440089712d61de38f925eb039f152ae03c6688ed714af729")
 	defer func(p *TxPool) {
-		if txs, total := p.GetSortedTxs(unit_hash); total.Float64() > dagconfig.DagConfig.UnitTxSize {
+		if txs, total := p.GetSortedTxs(unit_hash, 1); uint64(total.Float64()) > parameter.CurrentSysParameters.UnitMaxSize {
 			all = len(txs)
 			msg := fmt.Sprintf("total %v:total sizeof transactions is unexpected", total.Float64())
 			t.Error(msg)

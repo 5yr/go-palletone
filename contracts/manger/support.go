@@ -20,8 +20,9 @@
 package manger
 
 import (
-	"golang.org/x/net/context"
 	"time"
+
+	"golang.org/x/net/context"
 
 	"github.com/golang/protobuf/proto"
 	"github.com/palletone/go-palletone/common/log"
@@ -48,8 +49,8 @@ func (s *SupportImpl) IsSysCCAndNotInvokableExternal(name string) bool {
 // GetTxSimulator returns the transaction simulator for the specified ledger
 // a client may obtain more than one such simulator; they are made unique
 // by way of the supplied txid
-func (s *SupportImpl) GetTxSimulator(idag dag.IDag, chainid string, txid string) (rwset.TxSimulator, error) {
-	return rwM.NewTxSimulator(idag, chainid, txid)
+func (s *SupportImpl) GetTxSimulator(rwM rwset.TxManager, idag dag.IDag, chainid string, txid string) (rwset.TxSimulator, error) {
+	return rwM.NewTxSimulator(idag, chainid, txid, true)
 }
 
 //IsSysCC returns true if the name matches a system chaincode's
@@ -60,12 +61,15 @@ func (s *SupportImpl) IsSysCC(name string) bool {
 
 //Execute - execute proposal, return original response of chaincode
 func (s *SupportImpl) Execute(contractid []byte, ctxt context.Context, cid, name, version, txid string, syscc bool, signedProp *pb.SignedProposal, prop *pb.Proposal, spec interface{}, timeout time.Duration) (*pb.Response, *pb.ChaincodeEvent, error) {
+	log.Debugf("execute enter")
 	cccid := ccprovider.NewCCContext(contractid, cid, name, version, txid, syscc, signedProp, prop)
 
 	switch spec.(type) {
 	case *pb.ChaincodeDeploymentSpec:
+		log.Debugf("deploy")
 		return chaincode.Execute(ctxt, cccid, spec, timeout)
 	case *pb.ChaincodeInvocationSpec:
+		log.Debugf("invoke")
 		cis := spec.(*pb.ChaincodeInvocationSpec)
 
 		//log.Infof("cis:%v", cis)
@@ -118,28 +122,30 @@ func RwTxResult2DagInvokeUnit(tx rwset.TxSimulator, txid string, nm string, depl
 	}
 
 	for idx, val := range rd {
-		rd := md.ContractReadSet{
-			Key:     val.GetKey(),
-			Version: val.GetVersion(),
+		rs := md.ContractReadSet{
+			Key:        val.GetKey(),
+			Version:    val.GetVersion(),
+			ContractId: val.ContractId,
 		}
-		invoke.ReadSet = append(invoke.ReadSet, rd)
-		log.Infof("ReadSet: idx[%s], fun[%s], key[%s], val[%v]", idx, args[1], val.GetKey(), *val.GetVersion())
+		invoke.ReadSet = append(invoke.ReadSet, rs)
+		log.Infof("ReadSet: idx[%v], fun[%s], key[%s], val[%v]", idx, args[2], val.GetKey(), val.GetVersion())
 	}
 	for idx, val := range wt {
-		rd := md.ContractWriteSet{
-			Key:      val.GetKey(),
-			Value:    val.GetValue(),
-			IsDelete: val.GetIsDelete(),
+		ws := md.ContractWriteSet{
+			Key:        val.GetKey(),
+			Value:      val.GetValue(),
+			IsDelete:   val.GetIsDelete(),
+			ContractId: val.ContractId,
 		}
-		invoke.WriteSet = append(invoke.WriteSet, rd)
-		log.Infof("WriteSet: idx[%s], fun[%s], key[%s], val[%v], delete[%v]", idx, args[1], val.GetKey(), val.GetValue(), val.GetIsDelete())
+		invoke.WriteSet = append(invoke.WriteSet, ws)
+		log.Infof("WriteSet: idx[%d], fun[%s], key[%s], val[%v], delete[%t]", idx, args[2], val.GetKey(), val.GetValue(), val.GetIsDelete())
 	}
 
 	return invoke, nil
 }
 
 //func RwTxResult2DagDeployUnit(tx rwset.TxSimulator, txid string, nm string, fun []byte) (*pb.ContractDeployPayload, error) {
-func RwTxResult2DagDeployUnit(tx rwset.TxSimulator, templateId []byte, nm string, deployId []byte, args [][]byte, timeout time.Duration) (*md.ContractDeployPayload, error) {
+func RwTxResult2DagDeployUnit(tx rwset.TxSimulator, templateId []byte, nm string, contractId []byte, args [][]byte, timeout time.Duration) (*md.ContractDeployPayload, error) {
 	log.Debug("RwTxResult2DagDeployUnit enter")
 
 	rd, wt, err := tx.GetRwData(nm)
@@ -148,41 +154,31 @@ func RwTxResult2DagDeployUnit(tx rwset.TxSimulator, templateId []byte, nm string
 	}
 	log.Info("RwTxResult2DagDeployUnit", "nm=", nm, "rd=", rd, "wt=", wt)
 	deploy := &md.ContractDeployPayload{
-		TemplateId: templateId,
-		ContractId: deployId,
+		ContractId: contractId,
 		Name:       nm,
-		Args:       args,
 		ReadSet:    make([]md.ContractReadSet, 0),
 		WriteSet:   make([]md.ContractWriteSet, 0),
 	}
 
 	for idx, val := range rd {
-		rd := md.ContractReadSet{
-			Key:     val.GetKey(),
-			Version: val.GetVersion(),
+		rs := md.ContractReadSet{
+			Key:        val.GetKey(),
+			Version:    val.GetVersion(),
+			ContractId: val.ContractId,
 		}
-		deploy.ReadSet = append(deploy.ReadSet, rd)
-		log.Info("RwTxResult2DagDeployUnit", "ReadSet: idx", idx, "fun", args[1], "key", val.GetKey(), "val", *val.GetVersion())
+		deploy.ReadSet = append(deploy.ReadSet, rs)
+		log.Info("RwTxResult2DagDeployUnit", "ReadSet: idx", idx, "args", args, "key", val.GetKey(), "val", *val.GetVersion())
 	}
 	for idx, val := range wt {
-		rd := md.ContractWriteSet{
-			Key:      val.GetKey(),
-			Value:    val.GetValue(),
-			IsDelete: val.GetIsDelete(),
+		ws := md.ContractWriteSet{
+			Key:        val.GetKey(),
+			Value:      val.GetValue(),
+			IsDelete:   val.GetIsDelete(),
+			ContractId: val.ContractId,
 		}
-		deploy.WriteSet = append(deploy.WriteSet, rd)
-		log.Info("RwTxResult2DagDeployUnit", "WriteSet: idx", idx, "fun", args[1], "key", val.GetKey(), "val", val.GetValue(), "delete", val.GetIsDelete())
+		deploy.WriteSet = append(deploy.WriteSet, ws)
+		log.Info("RwTxResult2DagDeployUnit", "WriteSet: idx", idx, "args", args, "key", val.GetKey(), "val", val.GetValue(), "delete", val.GetIsDelete())
 	}
 
 	return deploy, nil
-}
-
-var rwM *rwset.RwSetTxMgr
-
-func init() {
-	var err error
-	rwM, err = rwset.NewRwSetMgr("default")
-	if err != nil {
-		log.Error("fail!")
-	}
 }

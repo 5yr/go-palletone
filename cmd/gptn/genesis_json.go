@@ -11,6 +11,7 @@
    You should have received a copy of the GNU General Public License
    along with go-palletone.  If not, see <http://www.gnu.org/licenses/>.
 */
+
 /*
  * @author PalletOne core developer Albert·Gou <dev@pallet.one>
  * @date 2018
@@ -23,15 +24,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/palletone/go-palletone/cmd/console"
 	"github.com/palletone/go-palletone/cmd/utils"
 	"github.com/palletone/go-palletone/common"
 	"github.com/palletone/go-palletone/common/files"
+	"github.com/palletone/go-palletone/common/log"
 	"github.com/palletone/go-palletone/configure"
 	mp "github.com/palletone/go-palletone/consensus/mediatorplugin"
+	"github.com/palletone/go-palletone/contracts/syscontract"
 	"github.com/palletone/go-palletone/core"
 	"github.com/palletone/go-palletone/core/gen"
+	"github.com/palletone/go-palletone/dag/dagconfig"
 	"github.com/palletone/go-palletone/dag/errors"
 	"gopkg.in/urfave/cli.v1"
 )
@@ -55,9 +60,10 @@ var (
 		Action:    utils.MigrateFlags(createGenesisJson),
 		Name:      "newgenesis",
 		Usage:     "Create a genesis json file template",
-		ArgsUsage: "<genesisJsonPath>",
+		ArgsUsage: "<genesisJsonPath> <openStdout>",
 		Flags: []cli.Flag{
 			GenesisJsonPathFlag,
+			utils.CryptoLibFlag,
 		},
 		Category: "BLOCKCHAIN COMMANDS",
 		Description: `
@@ -108,7 +114,7 @@ func getTokenAccount(ctx *cli.Context) (string, error) {
 }
 
 func createExampleMediators(ctx *cli.Context, mcLen int) []*mp.MediatorConf {
-	exampleMediators := make([]*mp.MediatorConf, mcLen, mcLen)
+	exampleMediators := make([]*mp.MediatorConf, mcLen)
 	for i := 0; i < mcLen; i++ {
 		account, password, _ := createExampleAccount(ctx)
 		secStr, pubStr := core.CreateInitDKS()
@@ -136,30 +142,29 @@ func createGenesisJson(ctx *cli.Context) error {
 		return err
 	}
 
-	mcs := createExampleMediators(ctx, core.DefaultMediatorCount)
-	nodeStr, err := getNodeInfo(ctx)
-	if err != nil {
-		return err
-	}
+	mcs := createExampleMediators(ctx, core.DefaultActiveMediatorCount)
+	nodeStr /*, err*/ := getNodeInfo(ctx)
+	//if err != nil {
+	//	return err
+	//}
 
 	genesisState := createExampleGenesis()
 	genesisState.TokenHolder = account
-	genesisState.SystemConfig.FoundationAddress = genesisState.TokenHolder
+	genesisState.InitialParameters.FoundationAddress = account
+	genesisState.DigitalIdentityConfig.RootCAHolder = account
+	genesisState.ImmutableParameters.MinMaintSkipSlots = 2
+
+	genesisState.InitialParameters.MediatorInterval = 3
+	genesisState.InitialTimestamp = genesisState.InitialTimestamp / 3 * 3
+	genesisState.InitialParameters.MaintenanceSkipSlots = 2
 	genesisState.InitialMediatorCandidates = initialMediatorCandidates(mcs, nodeStr)
 
-	// set root ca holder
-	genesisState.DigitalIdentityConfig.RootCAHolder = genesisState.TokenHolder
-
-	initMediatorCount := len(mcs)
-	genesisState.InitialActiveMediators = uint16(initMediatorCount)
-	genesisState.ImmutableParameters.MinimumMediatorCount = uint8(initMediatorCount)
-
 	//配置测试的基金会地址及密码
-	account, _, err = createExampleAccount(ctx)
-	if err != nil {
-		return err
-	}
-	genesisState.SystemConfig.FoundationAddress = account
+	//account, _, err = createExampleAccount(ctx)
+	//if err != nil {
+	//	return err
+	//}
+	//genesisState.SystemConfig.FoundationAddress = account
 
 	var genesisJson []byte
 	genesisJson, err = json.MarshalIndent(genesisState, "", "  ")
@@ -177,11 +182,11 @@ func createGenesisJson(ctx *cli.Context) error {
 	}
 
 	genesisFile, err = os.Create(genesisOut)
-	defer genesisFile.Close()
 	if err != nil {
 		utils.Fatalf("%v", err)
 		return err
 	}
+	defer genesisFile.Close()
 
 	_, err = genesisFile.Write(genesisJson)
 	if err != nil {
@@ -196,7 +201,24 @@ func createGenesisJson(ctx *cli.Context) error {
 
 	return nil
 }
+func initSysContracts() []core.SysContract {
+	list := make([]core.SysContract, 0)
+	list = append(list, core.SysContract{Address: syscontract.CreateTokenContractAddress, Name: "PRC20", Active: true})
+	list = append(list, core.SysContract{Address: syscontract.CreateToken721ContractAddress,
+		Name: "PRC721", Active: true})
+	list = append(list, core.SysContract{Address: syscontract.SysConfigContractAddress,
+		Name: "System Config Manager", Active: true})
+	list = append(list, core.SysContract{Address: syscontract.PartitionContractAddress,
+		Name: "Partition Manager", Active: true})
+	list = append(list, core.SysContract{Address: syscontract.DepositContractAddress,
+		Name: "Deposit Manager", Active: true})
+	list = append(list, core.SysContract{Address: syscontract.DigitalIdentityContractAddress,
+		Name: "Digital Identity", Active: true})
+	list = append(list, core.SysContract{Address: syscontract.VoteTokenContractAddress, Name: "Vote", Active: true})
+	list = append(list, core.SysContract{Address: syscontract.TestContractAddress, Name: "Test", Active: true})
 
+	return list
+}
 func modifyConfig(ctx *cli.Context, mediators []*mp.MediatorConf) error {
 	cfg := new(FullConfig)
 	configPath := getConfigPath(ctx)
@@ -211,14 +233,29 @@ func modifyConfig(ctx *cli.Context, mediators []*mp.MediatorConf) error {
 	// 修改本节点中mediator的一些特殊配置
 	cfg.MediatorPlugin.EnableProducing = true
 	cfg.MediatorPlugin.EnableStaleProduction = true
-	cfg.MediatorPlugin.EnableConsecutiveProduction = false
+	cfg.MediatorPlugin.EnableConsecutiveProduction = true
 	cfg.MediatorPlugin.RequiredParticipation = 0
 	cfg.MediatorPlugin.EnableGroupSigning = true
 	cfg.MediatorPlugin.Mediators = mediators
 
+	// change log
+	isOpenSTD := ctx.Args().Get(1)
+	isOpenSTD = strings.ToUpper(isOpenSTD)
+	if isOpenSTD == "FALSE" {
+		newLogOutPath := make([]string, 0)
+		for _, p := range cfg.Log.OutputPaths {
+			if p == log.LogStdout {
+				continue
+			}
+			newLogOutPath = append(newLogOutPath, p)
+		}
+		cfg.Log.OutputPaths = newLogOutPath
+	}
 	// 修改默认的Jury配置
-	cfg.Jury.Accounts[0].Address = mediators[0].Address
-	cfg.Jury.Accounts[0].Password = mediators[0].Password
+	if len(mediators) > 0 {
+		cfg.Jury.Accounts[0].Address = mediators[0].Address
+		cfg.Jury.Accounts[0].Password = mediators[0].Password
+	}
 
 	err = makeConfigFile(cfg, configPath)
 	if err != nil {
@@ -252,6 +289,7 @@ func initialAccount(ctx *cli.Context) (string, error) {
 	address, err := newAccount(ctx)
 	if err != nil {
 		utils.Fatalf("%v", err)
+		return address.Str(), err
 	}
 
 	fmt.Printf("Initial token holder's account address: %s\n", address.String())
@@ -268,50 +306,58 @@ func createExampleAccount(ctx *cli.Context) (addrStr, password string, err error
 
 // createExampleGenesis, create the genesis state of new chain with the specified account
 func createExampleGenesis() *core.Genesis {
-	SystemConfig := core.SystemConfig{
-		DepositRate:               core.DefaultDepositRate,
-		TxCoinYearRate:            core.DefaultTxCoinYearRate,
-		GenerateUnitReward:        core.DefaultGenerateUnitReward,
-		FoundationAddress:         core.DefaultFoundationAddress,
-		DepositAmountForMediator:  core.DefaultDepositAmountForMediator,
-		DepositAmountForJury:      core.DefaultDepositAmountForJury,
-		DepositAmountForDeveloper: core.DefaultDepositAmountForDeveloper,
-		DepositPeriod:             core.DefaultDepositPeriod,
-		UccMemory:core.DefaultUccMemory,
-		UccMemorySwap:core.DefaultUccMemorySwap,
-		UccCpuShares:core.DefaultUccCpuShares,
-		UccCpuPeriod:core.DefaultCpuPeriod,
-		UccCpuQuota:core.DefaultUccCpuQuota,
-		UccCpuSetCpus:core.DefaultUccCpuSetCpus,
-		TempUccMemory:core.DefaultTempUccMemory,
-		TempUccMemorySwap:core.DefaultTempUccMemorySwap,
-		TempUccCpuShares:core.DefaultTempUccCpuShares,
-		TempUccCpuQuota:core.DefaultTempUccCpuQuota,
-	}
-	DigitalIdentityConfig := core.DigitalIdentityConfig{
-		// default root ca holder, 默认是基金会地址
-		RootCAHolder: core.DefaultFoundationAddress,
-		RootCABytes:  core.DefaultRootCABytes,
-	}
+	//SystemConfig := core.SystemConfig{
+	//	DepositRate:               core.DefaultDepositRate,
+	//	TxCoinYearRate:            core.DefaultTxCoinYearRate,
+	//	GenerateUnitReward:        core.DefaultGenerateUnitReward,
+	//	RewardHeight:              core.DefaultRewardHeight,
+	//	FoundationAddress:         core.DefaultFoundationAddress,
+	//	DepositAmountForMediator:  core.DefaultDepositAmountForMediator,
+	//	DepositAmountForJury:      core.DefaultDepositAmountForJury,
+	//	DepositAmountForDeveloper: core.DefaultDepositAmountForDeveloper,
+	//	DepositPeriod:             core.DefaultDepositPeriod,
+	//	UccMemory:                 core.DefaultUccMemory,
+	//	UccMemorySwap:             core.DefaultUccMemorySwap,
+	//	UccCpuShares:              core.DefaultUccCpuShares,
+	//	UccCpuPeriod:              core.DefaultCpuPeriod,
+	//	UccCpuQuota:               core.DefaultUccCpuQuota,
+	//	UccCpuSetCpus:             core.DefaultUccCpuSetCpus,
+	//	TempUccMemory:             core.DefaultTempUccMemory,
+	//	TempUccMemorySwap:         core.DefaultTempUccMemorySwap,
+	//	TempUccCpuShares:          core.DefaultTempUccCpuShares,
+	//	TempUccCpuQuota:           core.DefaultTempUccCpuQuota,
+	//	ContractSignatureNum:      core.DefaultContractSignatureNum,
+	//	ContractElectionNum:       core.DefaultContractElectionNum,
+	//
+	//	ActiveMediatorCount: strconv.FormatUint(core.DefaultMediatorCount, 10),
+	//}
+
+	//DigitalIdentityConfig := core.DigitalIdentityConfig{
+	//	// default root ca holder, 默认是基金会地址
+	//	RootCAHolder: core.DefaultFoundationAddress,
+	//	RootCABytes:  core.DefaultRootCABytes,
+	//}
+
 	initParams := core.NewChainParams()
 	mediators := []*mp.MediatorConf{mp.DefaultMediatorConf()}
 
 	return &core.Genesis{
-		GasToken:    core.DefaultAlias,
 		Version:     configure.Version,
+		GasToken:    dagconfig.DefaultToken, //core.DefaultAlias,
 		TokenAmount: core.DefaultTokenAmount,
 		//TokenDecimal:              core.DefaultTokenDecimal,
-		ChainID:                   core.DefaultChainID,
-		TokenHolder:               core.DefaultTokenHolder,
-		ParentUnitHeight:          -1,
-		Text:                      core.DefaultText,
-		SystemConfig:              SystemConfig,
-		DigitalIdentityConfig:     DigitalIdentityConfig,
-		InitialParameters:         initParams,
-		ImmutableParameters:       core.NewImmutChainParams(),
-		InitialTimestamp:          gen.InitialTimestamp(initParams.MediatorInterval),
-		InitialActiveMediators:    core.DefaultMediatorCount,
+		ChainID:     core.DefaultChainID,
+		TokenHolder: core.DefaultTokenHolder,
+		Text:        core.DefaultText,
+		//SystemConfig:          SystemConfig,
+		DigitalIdentityConfig: core.DefaultDigitalIdentityConfig(),
+		ParentUnitHeight:      -1,
+		InitialParameters:     initParams,
+		ImmutableParameters:   core.NewImmutChainParams(),
+		InitialTimestamp:      gen.InitialTimestamp(initParams.MediatorInterval),
+		//InitialActiveMediators:    core.DefaultMediatorCount,
 		InitialMediatorCandidates: initialMediatorCandidates(mediators, core.DefaultNodeInfo),
+		SystemContracts:           initSysContracts(),
 	}
 }
 
@@ -321,6 +367,7 @@ func initialMediatorCandidates(mediators []*mp.MediatorConf, nodeInfo string) []
 	for i := 0; i < mcLen; i++ {
 		im := core.NewInitialMediator()
 		im.AddStr = mediators[i].Address
+		im.RewardAdd = mediators[i].Address
 		im.InitPubKey = mediators[i].InitPubKey
 		im.Node = nodeInfo
 		initialMediators[i] = im
@@ -347,11 +394,11 @@ func dumpJson(ctx *cli.Context) error {
 	}
 
 	file, err1 := os.Create(filePath)
-	defer file.Close()
 	if err1 != nil {
 		utils.Fatalf("%v", err1)
 		return err1
 	}
+	defer file.Close()
 
 	_, err = file.Write(genesisJson)
 	if err != nil {

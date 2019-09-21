@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/palletone/go-palletone/common"
 	"github.com/palletone/go-palletone/common/event"
 	"github.com/palletone/go-palletone/common/p2p"
 	"github.com/palletone/go-palletone/common/p2p/discover"
@@ -79,6 +80,14 @@ func (t *testService) peer(id discover.NodeID) *testPeer {
 	return peer
 }
 
+func (t *testService) CorsProtocols() []p2p.Protocol {
+	return nil
+}
+
+func (s *testService) GenesisHash() common.Hash {
+	return common.Hash{}
+}
+
 func (t *testService) Protocols() []p2p.Protocol {
 	return []p2p.Protocol{
 		{
@@ -113,7 +122,7 @@ func (t *testService) APIs() []rpc.API {
 	}}
 }
 
-func (t *testService) Start(server *p2p.Server) error {
+func (t *testService) Start(server *p2p.Server, corss *p2p.Server) error {
 	return nil
 }
 

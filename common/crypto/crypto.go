@@ -23,24 +23,27 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/btcsuite/btcutil/base58"
-	"github.com/palletone/go-palletone/common"
-	"github.com/palletone/go-palletone/common/crypto/sha3"
-	"github.com/palletone/go-palletone/common/math"
 	"io"
 	"io/ioutil"
 	"math/big"
 	"os"
+
+	"github.com/btcsuite/btcd/btcec"
+	"github.com/btcsuite/btcutil/base58"
+	"github.com/palletone/go-palletone/common"
+	"github.com/palletone/go-palletone/common/math"
+	"golang.org/x/crypto/sha3"
 )
 
 var (
 	secp256k1_N, _  = new(big.Int).SetString("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141", 16)
 	secp256k1_halfN = new(big.Int).Div(secp256k1_N, big.NewInt(2))
 )
+var MyCryptoLib ICrypto = &CryptoS256{}
 
 // Keccak256 calculates and returns the Keccak256 hash of the input data.
 func Keccak256(data ...[]byte) []byte {
-	d := sha3.NewKeccak256()
+	d := sha3.New256()
 	for _, b := range data {
 		d.Write(b)
 	}
@@ -50,7 +53,7 @@ func Keccak256(data ...[]byte) []byte {
 // Keccak256Hash calculates and returns the Keccak256 hash of the input data,
 // converting it to an internal Hash data structure.
 func Keccak256Hash(data ...[]byte) (h common.Hash) {
-	d := sha3.NewKeccak256()
+	d := sha3.New256()
 	for _, b := range data {
 		d.Write(b)
 	}
@@ -59,13 +62,13 @@ func Keccak256Hash(data ...[]byte) (h common.Hash) {
 }
 
 // Keccak512 calculates and returns the Keccak512 hash of the input data.
-func Keccak512(data ...[]byte) []byte {
-	d := sha3.NewKeccak512()
-	for _, b := range data {
-		d.Write(b)
-	}
-	return d.Sum(nil)
-}
+//func Keccak512(data ...[]byte) []byte {
+//	d := sha3.NewKeccak512()
+//	for _, b := range data {
+//		d.Write(b)
+//	}
+//	return d.Sum(nil)
+//}
 
 // Creates an ethereum address given the bytes and the nonce
 //func CreateAddress(b common.Address, nonce uint64) common.Address {
@@ -114,7 +117,7 @@ func ToECDSAUnsafe(d []byte) *ecdsa.PrivateKey {
 // it can also accept legacy encodings (0 prefixes).
 func toECDSA(d []byte, strict bool) (*ecdsa.PrivateKey, error) {
 	priv := new(ecdsa.PrivateKey)
-	priv.PublicKey.Curve = S256()
+	priv.PublicKey.Curve = btcec.S256()
 	if strict && 8*len(d) != priv.Params().BitSize {
 		return nil, fmt.Errorf("invalid length, need %d bits", priv.Params().BitSize)
 	}
@@ -148,8 +151,8 @@ func ToECDSAPub(pub []byte) *ecdsa.PublicKey {
 	if len(pub) == 0 {
 		return nil
 	}
-	x, y := elliptic.Unmarshal(S256(), pub)
-	return &ecdsa.PublicKey{Curve: S256(), X: x, Y: y}
+	x, y := elliptic.Unmarshal(btcec.S256(), pub)
+	return &ecdsa.PublicKey{Curve: btcec.S256(), X: x, Y: y}
 }
 
 // Deprecated: Please use crypto.CompressPubkey to get []byte pubkey
@@ -157,7 +160,7 @@ func FromECDSAPub(pub *ecdsa.PublicKey) []byte {
 	if pub == nil || pub.X == nil || pub.Y == nil {
 		return nil
 	}
-	return elliptic.Marshal(S256(), pub.X, pub.Y)
+	return elliptic.Marshal(btcec.S256(), pub.X, pub.Y)
 }
 
 // HexToECDSA parses a secp256k1 private key.
@@ -215,10 +218,10 @@ func ValidateSignatureValues(v byte, r, s *big.Int, homestead bool) bool {
 }
 
 //This is only for P2PKH account address.
-func PubkeyToAddress(p *ecdsa.PublicKey) common.Address {
-	pubBytes := CompressPubkey(p)
-	return PubkeyBytesToAddress(pubBytes)
-}
+//func PubkeyToAddress(p *ecdsa.PublicKey) common.Address {
+//	pubBytes := CompressPubkey(p)
+//	return PubkeyBytesToAddress(pubBytes)
+//}
 func PubkeyBytesToAddress(pubKeyCompressBytes []byte) common.Address {
 	pubKeyHash := Hash160(pubKeyCompressBytes)
 	return common.NewAddress(pubKeyHash, common.PublicKeyHash)
@@ -234,12 +237,36 @@ func ScriptHashToAddress(scriptHash []byte) common.Address {
 	return common.NewAddress(scriptHash, common.ScriptHash)
 }
 
-func ContractIdToAddress(contractId []byte) common.Address {
-	scriptHash := Hash160(contractId)
+func RequestIdToContractAddress(deployRequestId common.Hash) common.Address {
+	scriptHash := Hash160(deployRequestId.Bytes())
 	return common.NewAddress(scriptHash, common.ContractHash)
 }
-func zeroBytes(bytes []byte) {
-	for i := range bytes {
-		bytes[i] = 0
+
+// func zeroBytes(bytes []byte) {
+// 	for i := range bytes {
+// 		bytes[i] = 0
+// 	}
+// }
+
+// GetRandomBytes returns len random looking bytes
+func GetRandomBytes(len int) ([]byte, error) {
+	key := make([]byte, len)
+
+	// TODO: rand could fill less bytes then len
+	_, err := rand.Read(key)
+	if err != nil {
+		return nil, err
 	}
+
+	return key, nil
+}
+
+const (
+	// NonceSize is the default NonceSize
+	NonceSize = 24
+)
+
+// GetRandomNonce returns a random byte array of length NonceSize
+func GetRandomNonce() ([]byte, error) {
+	return GetRandomBytes(NonceSize)
 }

@@ -1,111 +1,57 @@
 *** Keywords ***
 normalCrtTrans
-    [Arguments]    ${result_code}
-    ${ret}    Given I_set_crtTrans_params_to_Normal
-    ${resp}    When I_post_a_crtTrans_request    ${ret}
-    ${resultCrt}    Then I_get_a_crtTrans_result${result_code}    ${resp}
-    [Return]    ${resultCrt}
+    [Arguments]    ${senderAddr}    ${recieverAddr}    ${senderPTN}    ${Poundage}
+    ${jsonRes}    Request create transaction    ${senderAddr}    ${recieverAddr}    ${senderPTN}    ${Poundage}
+    ${ret}    Should Match Regexp    ${jsonRes['result']}    ${commonResultCode}    msg="result:does't match Result expression"
+    [Return]    ${jsonRes['result']}
 
 normalSignTrans
-    [Arguments]    ${result_hex}    ${result_txid}
-    ${resultCrt}    normalCrtTrans    ${result_code}
-    ${signList}    Given I_set_signTrans_input_to_Normal    ${resultCrt}
-    ${resp}    When I_post_a_signtTrans_request    ${signList}
-    ${hex}    Then I_get_the_signTrans_hex${result_hex}_txid${result_txid}    ${resp}
+    [Arguments]    ${crtRet}    ${signType}    ${pwd}
+    ${resp}    Request sign transaction    ${crtRet}    ${signType}    ${pwd}
+    ${hex}    Should Match Regexp    ${resp['hex']}    ${result_hex}    msg="hex:does't match Result expression"
+    ${txid}    Should Match Regexp    ${resp['txid']}    ${result_txid}    msg="txid:does't match Result expression"
     [Return]    ${hex}
 
 normalSendTrans
-    ${hex}    normalSignTrans    ${result_hex}    ${result_txid}
-    ${ret2}    Given I_set_sendTrans_input_to_Normal    ${hex}
-    ${resp2}    When I_post_a_sendTrans_request    ${ret2}
-    ${result}    Then I_get_the_sendTrans_result    ${resp2}
-    [Return]    ${result}
+    [Arguments]    ${hex}
+    ${resp}    Request send transaction    ${hex}
+    ${ret}    Should Match Regexp    ${resp['result']}    ${sendResult}    msg="result:does't match Result expression"
+    [Return]    ${ret}
 
-normalCcinvokdePass
-    [Arguments]    ${result_code}
-    ${ret}    Given I_set_CcinvokdePass_params_to_Normal
-    ${resp}    When I_post_a_CcinvokdePass_request    ${ret}
-    ${resultCrt}    Then I_get_a_CcinvokdePass_result${result_code}    ${resp}
-    [Return]    ${resultCrt}
+normalCcinvokePass
+    [Arguments]    ${commonResultCode}    ${senderAdd}    ${recieverAdd}    ${PTNAmount}    ${PTNPoundage}    ${ContractId}
+    ...    ${ccList}
+    ${resp}    Request CcinvokePass    ${commonResultCode}    ${senderAdd}    ${recieverAdd}    ${PTNAmount}    ${PTNPoundage}
+    ...    ${ContractId}    ${ccList}
+    #Should Contain    ${jsonRes['jsonrpc']}    2.0    msg="jsonrpc:failed"
+    #Should Contain    str(${jsonRes['id']})    1    msg="id:failed"
+    ${ret}    Should Match Regexp    ${resp['result']}    ${commonResultCode}    msg="result:does't match Result expression"
+    [Return]    ${ret}
 
 normalTransferToken
     [Arguments]    ${result_code}
-    ${ret}    Given I_set_TransferToken_params_to_Normal    ${tokenId}
-    ${resp}    When I_post_a_TransferToken_request    ${ret}
-    ${resultCrt}    Then I_get_a_TransferToken_result${result_code}    ${resp}
+    ${resultCrt}    Given I_set_TransferToken_params_to_Normal    ${preTokenId}
     [Return]    ${resultCrt}
 
 normalGetTxByReqId
     [Arguments]    ${result_code}
-    ${ret}    Given I_set_GetTxByReqId_params_to_Normal    ${tokenId}
-    ${resp}    When I_post_a_GetTxByReqId_request    ${ret}
-    ${resultCrt}    Then I_get_a_GetTxByReqId_result${result_code}    ${resp}
+    ${resultCrt}    Given I_set_GetTxByReqId_params_to_Normal    ${tokenId}
     [Return]    ${resultCrt}
 
 normalGetBalance
-    [Arguments]    ${address}
-    ${ret}    Given I_set_getBalance_params_to_Normal    ${address}
-    ${resp}    When I_post_a_getBalance_request    ${ret}
-    ${ptn}    ${result}    Then I_get_a_getBalance_result    ${resp}
-    [Return]    ${ptn}    ${result}
+    [Arguments]    ${address}    ${host}=${host}
+    ${PTN}    ${RESULT}    Request getBalance    ${address}    ${host}
+    #Should Match Regexp    ${RESULT}    result    msg="TotalSupply:does't match"
+    [Return]    ${PTN}    ${RESULT}
 
-setInvalidSender
-    [Arguments]    ${i}    ${error_code}    ${error_message}
-    ${result}    Given I set senderAddr to ${i}    ${i}
-    ${resp}    When I post a crtTrans request    ${result}
-    Then I get a code ${error_code} and a message ${error_message}    ${resp}
+normalCcqueryById
+    [Arguments]    ${contractId}    ${methodType}    ${preTokenId}
+    ${resp}    Request Ccquery    ${contractId}    ${methodType}    ${preTokenId}
+    [Return]    ${resp['result']}
 
-setInvalidReciever
-    [Arguments]    ${i}    ${error_code}    ${error_message}
-    ${result}    Given I set recieverAddr to ${i}    ${i}
-    ${resp}    When I post a crtTrans request    ${result}
-    Then I get a code ${error_code} and a message ${error_message}    ${resp}
-
-setInvalidAmount
-    [Arguments]    ${i}    ${error_code}    ${error_message}
-    ${result}    Given I set Amount to ${i}    ${i}
-    ${resp}    When I post a crtTrans request    ${result}
-    Then I get a code ${error_code} and a message ${error_message}    ${resp}
-
-setInvalidPoundage
-    [Arguments]    ${i}    ${error_code}    ${error_message}
-    ${result}    Given I set Poundage to ${i}    ${i}
-    ${resp}    When I post a crtTrans request    ${result}
-    Then I get a code ${error_code} and a message ${error_message}    ${resp}
-
-setInvalidSign
-    [Arguments]    ${i}    ${error_code}    ${error_message}
-    ${result}    Given I set signTrans result to ${i}    ${i}
-    ${resp}    When I post a signTrans request    ${result}
-    Then I get a code ${error_code} and a message ${error_message}    ${resp}
-
-setInvalidSignPass
-    [Arguments]    ${crtResult}    ${i}    ${error_code}    ${error_message}
-    ${result}    Given I set signTrans password to ${i}    ${crtResult}    ${i}
-    ${resp}    When I post a signTrans request    ${result}
-    Then I get a code ${error_code} and a message ${error_message}    ${resp}
-
-setCrtInvalidSign
-    [Arguments]    ${i}    ${error_code}    ${error_message}
-    ${crtResult}    normalCrtTrans    ${result_code}
-    ${result}    Given I set signTrans password to ${i}    ${crtResult}    ${i}
-    ${resp}    When I post a signTrans request    ${result}
-    Then I get a code ${error_code} and a message ${error_message}    ${resp}
-
-setEmptySign
-    [Arguments]    ${i}
-    ${result}    Given I set signTrans to empty list    ${i}
-    ${resp}    When I post a signTrans request    ${result}
-    Then I get a code ${error_code} and a message ${error_message}    ${resp}
-
-setInvalidSend
-    [Arguments]    ${i}    ${error_code}    ${error_message}
-    ${result}    Given I set sendTrans result to ${i}    ${i}
-    ${resp}    When I post a sendTrans request    ${result}
-    Then I get a code ${error_code} and a message ${error_message}    ${resp}
-
-invalidGetbalance
-    [Arguments]    ${i}    ${error_code}    ${error_message}
-    ${result}    Given I set getBalance params to ${i}    ${i}
-    ${resp}    When I post a getBalance request    ${result}
-    Then I get a Getbalance code ${error_code} and a message ${error_message}    ${resp}
+normalVoteTransfer
+    [Arguments]    ${result_code}    ${tokenId}    ${tokenDecimal}    ${tokenAmount}    ${amount}    ${poundage}
+    ${ret}    Given I_set_CcinvokePass_params_to_Normal    ${tokenId}    ${tokenDecimal}    ${tokenAmount}    ${amount}    ${poundage}
+    ${resp}    When I_post_a_CcinvokePass_request    ${ret}
+    ${resultCrt}    Then I_get_a_CcinvokePass_result    ${resp}    ${result_code}
+    [Return]    ${resultCrt}

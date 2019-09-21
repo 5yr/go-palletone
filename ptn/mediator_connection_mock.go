@@ -9,7 +9,6 @@ import (
 	common "github.com/palletone/go-palletone/common"
 	event "github.com/palletone/go-palletone/common/event"
 	mediatorplugin "github.com/palletone/go-palletone/consensus/mediatorplugin"
-	modules "github.com/palletone/go-palletone/dag/modules"
 	reflect "reflect"
 )
 
@@ -51,15 +50,15 @@ func (mr *MockproducerMockRecorder) SubscribeNewProducedUnitEvent(ch interface{}
 }
 
 // AddToTBLSSignBufs mocks base method
-func (m *Mockproducer) AddToTBLSSignBufs(newUnit *modules.Unit) {
+func (m *Mockproducer) AddToTBLSSignBufs(newHash common.Hash) {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "AddToTBLSSignBufs", newUnit)
+	m.ctrl.Call(m, "AddToTBLSSignBufs", newHash)
 }
 
 // AddToTBLSSignBufs indicates an expected call of AddToTBLSSignBufs
-func (mr *MockproducerMockRecorder) AddToTBLSSignBufs(newUnit interface{}) *gomock.Call {
+func (mr *MockproducerMockRecorder) AddToTBLSSignBufs(newHash interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddToTBLSSignBufs", reflect.TypeOf((*Mockproducer)(nil).AddToTBLSSignBufs), newUnit)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddToTBLSSignBufs", reflect.TypeOf((*Mockproducer)(nil).AddToTBLSSignBufs), newHash)
 }
 
 // SubscribeSigShareEvent mocks base method
@@ -77,11 +76,9 @@ func (mr *MockproducerMockRecorder) SubscribeSigShareEvent(ch interface{}) *gomo
 }
 
 // AddToTBLSRecoverBuf mocks base method
-func (m *Mockproducer) AddToTBLSRecoverBuf(newUnitHash common.Hash, sigShare []byte) error {
+func (m *Mockproducer) AddToTBLSRecoverBuf(newUnitHash common.Hash, sigShare []byte) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "AddToTBLSRecoverBuf", newUnitHash, sigShare)
-	ret0, _ := ret[0].(error)
-	return ret0
+	m.ctrl.Call(m, "AddToTBLSRecoverBuf", newUnitHash, sigShare)
 }
 
 // AddToTBLSRecoverBuf indicates an expected call of AddToTBLSRecoverBuf
@@ -104,18 +101,16 @@ func (mr *MockproducerMockRecorder) SubscribeVSSDealEvent(ch interface{}) *gomoc
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SubscribeVSSDealEvent", reflect.TypeOf((*Mockproducer)(nil).SubscribeVSSDealEvent), ch)
 }
 
-// ProcessVSSDeal mocks base method
-func (m *Mockproducer) ProcessVSSDeal(deal *mediatorplugin.VSSDealEvent) error {
+// AddToDealBuf mocks base method
+func (m *Mockproducer) AddToDealBuf(deal *mediatorplugin.VSSDealEvent) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ProcessVSSDeal", deal)
-	ret0, _ := ret[0].(error)
-	return ret0
+	m.ctrl.Call(m, "AddToDealBuf", deal)
 }
 
-// ProcessVSSDeal indicates an expected call of ProcessVSSDeal
-func (mr *MockproducerMockRecorder) ProcessVSSDeal(deal interface{}) *gomock.Call {
+// AddToDealBuf indicates an expected call of AddToDealBuf
+func (mr *MockproducerMockRecorder) AddToDealBuf(deal interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ProcessVSSDeal", reflect.TypeOf((*Mockproducer)(nil).ProcessVSSDeal), deal)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddToDealBuf", reflect.TypeOf((*Mockproducer)(nil).AddToDealBuf), deal)
 }
 
 // SubscribeVSSResponseEvent mocks base method
@@ -196,18 +191,4 @@ func (m *Mockproducer) UpdateMediatorsDKG(isRenew bool) {
 func (mr *MockproducerMockRecorder) UpdateMediatorsDKG(isRenew interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateMediatorsDKG", reflect.TypeOf((*Mockproducer)(nil).UpdateMediatorsDKG), isRenew)
-}
-
-// IsEnabledGroupSign mocks base method
-func (m *Mockproducer) IsEnabledGroupSign() bool {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "IsEnabledGroupSign")
-	ret0, _ := ret[0].(bool)
-	return ret0
-}
-
-// IsEnabledGroupSign indicates an expected call of IsEnabledGroupSign
-func (mr *MockproducerMockRecorder) IsEnabledGroupSign() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsEnabledGroupSign", reflect.TypeOf((*Mockproducer)(nil).IsEnabledGroupSign))
 }

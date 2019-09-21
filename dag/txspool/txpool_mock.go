@@ -48,7 +48,7 @@ func (mr *MockITxPoolMockRecorder) Stop() *gomock.Call {
 }
 
 // AddLocal mocks base method
-func (m *MockITxPool) AddLocal(tx *modules.TxPoolTransaction) error {
+func (m *MockITxPool) AddLocal(tx *modules.Transaction) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "AddLocal", tx)
 	ret0, _ := ret[0].(error)
@@ -62,7 +62,7 @@ func (mr *MockITxPoolMockRecorder) AddLocal(tx interface{}) *gomock.Call {
 }
 
 // AddLocals mocks base method
-func (m *MockITxPool) AddLocals(txs []*modules.TxPoolTransaction) []error {
+func (m *MockITxPool) AddLocals(txs []*modules.Transaction) []error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "AddLocals", txs)
 	ret0, _ := ret[0].([]error)
@@ -73,6 +73,34 @@ func (m *MockITxPool) AddLocals(txs []*modules.TxPoolTransaction) []error {
 func (mr *MockITxPoolMockRecorder) AddLocals(txs interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddLocals", reflect.TypeOf((*MockITxPool)(nil).AddLocals), txs)
+}
+
+// AddSequenTx mocks base method
+func (m *MockITxPool) AddSequenTx(tx *modules.Transaction) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AddSequenTx", tx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// AddSequenTx indicates an expected call of AddSequenTx
+func (mr *MockITxPoolMockRecorder) AddSequenTx(tx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddSequenTx", reflect.TypeOf((*MockITxPool)(nil).AddSequenTx), tx)
+}
+
+// AddSequenTxs mocks base method
+func (m *MockITxPool) AddSequenTxs(txs []*modules.Transaction) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AddSequenTxs", txs)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// AddSequenTxs indicates an expected call of AddSequenTxs
+func (mr *MockITxPoolMockRecorder) AddSequenTxs(txs interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddSequenTxs", reflect.TypeOf((*MockITxPool)(nil).AddSequenTxs), txs)
 }
 
 // AllHashs mocks base method
@@ -161,18 +189,33 @@ func (mr *MockITxPoolMockRecorder) Pending() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Pending", reflect.TypeOf((*MockITxPool)(nil).Pending))
 }
 
-// SetPendingTxs mocks base method
-func (m *MockITxPool) SetPendingTxs(unit_hash common.Hash, txs []*modules.Transaction) error {
+// Queued mocks base method
+func (m *MockITxPool) Queued() ([]*modules.TxPoolTransaction, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SetPendingTxs", unit_hash, txs)
+	ret := m.ctrl.Call(m, "Queued")
+	ret0, _ := ret[0].([]*modules.TxPoolTransaction)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Queued indicates an expected call of Queued
+func (mr *MockITxPoolMockRecorder) Queued() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Queued", reflect.TypeOf((*MockITxPool)(nil).Queued))
+}
+
+// SetPendingTxs mocks base method
+func (m *MockITxPool) SetPendingTxs(unit_hash common.Hash, num uint64, txs []*modules.Transaction) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SetPendingTxs", unit_hash, num, txs)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // SetPendingTxs indicates an expected call of SetPendingTxs
-func (mr *MockITxPoolMockRecorder) SetPendingTxs(unit_hash, txs interface{}) *gomock.Call {
+func (mr *MockITxPoolMockRecorder) SetPendingTxs(unit_hash, num, txs interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetPendingTxs", reflect.TypeOf((*MockITxPool)(nil).SetPendingTxs), unit_hash, txs)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetPendingTxs", reflect.TypeOf((*MockITxPool)(nil).SetPendingTxs), unit_hash, num, txs)
 }
 
 // ResetPendingTxs mocks base method
@@ -247,18 +290,18 @@ func (mr *MockITxPoolMockRecorder) SubscribeTxPreEvent(arg0 interface{}) *gomock
 }
 
 // GetSortedTxs mocks base method
-func (m *MockITxPool) GetSortedTxs(hash common.Hash) ([]*modules.TxPoolTransaction, common.StorageSize) {
+func (m *MockITxPool) GetSortedTxs(hash common.Hash, index uint64) ([]*modules.TxPoolTransaction, common.StorageSize) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetSortedTxs", hash)
+	ret := m.ctrl.Call(m, "GetSortedTxs", hash, index)
 	ret0, _ := ret[0].([]*modules.TxPoolTransaction)
 	ret1, _ := ret[1].(common.StorageSize)
 	return ret0, ret1
 }
 
 // GetSortedTxs indicates an expected call of GetSortedTxs
-func (mr *MockITxPoolMockRecorder) GetSortedTxs(hash interface{}) *gomock.Call {
+func (mr *MockITxPoolMockRecorder) GetSortedTxs(hash, index interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSortedTxs", reflect.TypeOf((*MockITxPool)(nil).GetSortedTxs), hash)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSortedTxs", reflect.TypeOf((*MockITxPool)(nil).GetSortedTxs), hash, index)
 }
 
 // Get mocks base method
@@ -308,11 +351,11 @@ func (mr *MockITxPoolMockRecorder) Stats() *gomock.Call {
 }
 
 // Content mocks base method
-func (m *MockITxPool) Content() (map[common.Hash]*modules.Transaction, map[common.Hash]*modules.Transaction) {
+func (m *MockITxPool) Content() (map[common.Hash]*modules.TxPoolTransaction, map[common.Hash]*modules.TxPoolTransaction) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Content")
-	ret0, _ := ret[0].(map[common.Hash]*modules.Transaction)
-	ret1, _ := ret[1].(map[common.Hash]*modules.Transaction)
+	ret0, _ := ret[0].(map[common.Hash]*modules.TxPoolTransaction)
+	ret1, _ := ret[1].(map[common.Hash]*modules.TxPoolTransaction)
 	return ret0, ret1
 }
 

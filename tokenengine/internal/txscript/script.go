@@ -11,6 +11,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/palletone/go-palletone/common"
+	"github.com/palletone/go-palletone/common/log"
 	"github.com/palletone/go-palletone/dag/modules"
 )
 
@@ -28,6 +29,7 @@ const (
 	SigHashAll          SigHashType = 0x1
 	SigHashNone         SigHashType = 0x2
 	SigHashSingle       SigHashType = 0x3
+	SigHashRaw          SigHashType = 0x4 //直接对构造好的不包含任何签名信息的Tx签名
 	SigHashAnyOneCanPay SigHashType = 0x80
 
 	// sigHashMask defines the number of bits of the hash type which is used
@@ -269,18 +271,27 @@ func removeOpcodeByData(pkscript []parsedOpcode, data []byte) []parsedOpcode {
 	return retScript
 
 }
-func CalcSignatureHash(script []byte, hashType SigHashType, tx *modules.Transaction /**wire.MsgTx*/, msgIdx, idx int, crypto ICrypto) ([]byte, error) {
+func CalcSignatureHash(script []byte, hashType SigHashType, 
+	tx *modules.Transaction, msgIdx, idx int, 
+	crypto ICrypto) ([]byte, error) {
 	parsedScript, err := parseScript(script)
 	if err != nil {
 		return nil, fmt.Errorf("cannot parse output script: %v", err)
 	}
 	return calcSignatureHash(parsedScript, hashType, tx, msgIdx, idx, crypto), nil
 }
+func calcSignatureHash(script []parsedOpcode, hashType SigHashType, 
+	tx *modules.Transaction, msgIdx, idx int, crypto ICrypto) []byte {
+	data := calcSignatureData(script, hashType, tx, msgIdx, idx)
+	hash, _ := crypto.Hash(data)
+	return hash
+}
 
 // calcSignatureHash will, given a script and hash type for the current script
 // engine instance, calculate the signature hash to be used for signing and
 // verification.
-func calcSignatureHash(script []parsedOpcode, hashType SigHashType, tx *modules.Transaction, msgIdx, idx int, crypto ICrypto) []byte {
+func calcSignatureData(script []parsedOpcode, hashType SigHashType, 
+	tx *modules.Transaction, msgIdx, idx int) []byte {
 	pay := tx.TxMessages[msgIdx].Payload.(*modules.PaymentPayload)
 	// The SigHashSingle signature type signs only the corresponding input
 	// and output (the output with the same index number as the input).
@@ -316,17 +327,31 @@ func calcSignatureHash(script []parsedOpcode, hashType SigHashType, tx *modules.
 
 	txCopy := tx.Clone()
 	payCopy := txCopy.TxMessages[msgIdx].Payload.(*modules.PaymentPayload)
-	for i := range payCopy.Inputs {
-		if i == idx {
-			// UnparseScript cannot fail here because removeOpcode
-			// above only returns a valid script.
-			sigScript, _ := unparseScript(script)
-			payCopy.Inputs[idx].SignatureScript = sigScript
-		} else {
-			payCopy.Inputs[i].SignatureScript = nil
-		}
+	requestIndex := tx.GetRequestMsgIndex()
+	isInResult := false
+	if msgIdx > requestIndex && requestIndex != -1 {
+		isInResult = true
 	}
 
+	for mIdx, mCopy := range txCopy.TxMessages {
+		if mCopy.App == modules.APP_PAYMENT {
+			pay := txCopy.TxMessages[mIdx].Payload.(*modules.PaymentPayload)
+			if isInResult && mIdx < requestIndex {
+				continue // 对于请求部分的Payment，不做任何处理
+			}
+			for i := range pay.Inputs {
+				//Devin: for contract payout, remove all lockscript
+				if i == idx && mIdx == msgIdx && hashType != SigHashRaw {
+					// UnparseScript cannot fail here because removeOpcode
+					// above only returns a valid script.
+					sigScript, _ := unparseScript(script)
+					pay.Inputs[idx].SignatureScript = sigScript
+				} else {
+					pay.Inputs[i].SignatureScript = nil
+				}
+			}
+		}
+	}
 	switch hashType & sigHashMask {
 	case SigHashNone:
 		payCopy.Outputs = payCopy.Outputs[0:0] // Empty slice.
@@ -352,11 +377,8 @@ func calcSignatureHash(script []parsedOpcode, hashType SigHashType, tx *modules.
 		//		payCopy.TxIn[i].Sequence = 0
 		//	}
 		//}
-
-	default:
-		// Consensus treats undefined hashtypes like normal SigHashAll
-		// for purposes of hash generation.
-		fallthrough
+        default:
+                fallthrough
 	case SigHashOld:
 		fallthrough
 	case SigHashAll:
@@ -374,10 +396,11 @@ func calcSignatureHash(script []parsedOpcode, hashType SigHashType, tx *modules.
 	//payCopy.Serialize(&wbuf)
 	//binary.Write(&wbuf, binary.LittleEndian, hashType)
 	//return wire.DoubleSha256(wbuf.Bytes())
-	data, _ := rlp.EncodeToBytes(txCopy)
-	hash, _ := crypto.Hash(data)
-	return hash
-
+	data, err := rlp.EncodeToBytes(&txCopy)
+	if err != nil {
+		log.Error("Rlp encode tx error:" + err.Error())
+	}
+	return data
 }
 
 // asSmallInt returns the passed opcode, which must be true according to
@@ -406,7 +429,7 @@ func getSigOpCount(pops []parsedOpcode, precise bool) int {
 			fallthrough
 		case OP_CHECKMULTISIGVERIFY:
 			// If we are being precise then look for familiar
-			// patterns for multisig, for now all we recognise is
+			// patterns for multisig, for now all we recognize is
 			// OP_1 - OP_16 to signify the number of pubkeys.
 			// Otherwise, we use the max of 20.
 			if precise && i > 0 &&

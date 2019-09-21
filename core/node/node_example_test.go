@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/palletone/go-palletone/common"
 	"github.com/palletone/go-palletone/common/p2p"
 	"github.com/palletone/go-palletone/common/rpc"
 	"github.com/palletone/go-palletone/core/node"
@@ -35,10 +36,17 @@ import (
 //  - Stop() error               - method invoked when the node terminates the service
 type SampleService struct{}
 
-func (s *SampleService) Protocols() []p2p.Protocol { return nil }
-func (s *SampleService) APIs() []rpc.API           { return nil }
-func (s *SampleService) Start(*p2p.Server) error   { fmt.Println("Service starting..."); return nil }
-func (s *SampleService) Stop() error               { fmt.Println("Service stopping..."); return nil }
+func (s *SampleService) Protocols() []p2p.Protocol     { return nil }
+func (s *SampleService) CorsProtocols() []p2p.Protocol { return nil }
+func (s *SampleService) GenesisHash() common.Hash {
+	return common.Hash{}
+}
+func (s *SampleService) APIs() []rpc.API { return nil }
+func (s *SampleService) Start(*p2p.Server, *p2p.Server) error {
+	fmt.Println("Service starting...")
+	return nil
+}
+func (s *SampleService) Stop() error { fmt.Println("Service stopping..."); return nil }
 
 func ExampleService() {
 	// Create a network node to run protocols with the default values.

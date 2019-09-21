@@ -19,17 +19,16 @@ package light
 
 import (
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/palletone/go-palletone/common"
 	"github.com/palletone/go-palletone/common/hexutil"
 	"github.com/palletone/go-palletone/core/accounts"
-	//"github.com/ethereum/go-ethereum/consensus"
-	//"github.com/palletone/go-palletone/core"
-	//"github.com/ethereum/go-ethereum/core/bloombits"
 	"github.com/palletone/go-palletone/ptn"
 	"github.com/palletone/go-palletone/ptn/downloader"
+	//"github.com/ethereum/go-ethereum/consensus"
+	//"github.com/palletone/go-palletone/core"
+	"github.com/palletone/go-palletone/tokenengine"
 	//	"github.com/palletone/go-palletone/ptn/filters"
 	//"github.com/ethereum/go-ethereum/eth/gasprice"
 	//"github.com/ethereum/go-ethereum/light"
@@ -40,9 +39,14 @@ import (
 	"github.com/palletone/go-palletone/common/rpc"
 	"github.com/palletone/go-palletone/core/node"
 	//"github.com/palletone/go-palletone/core/types"
+	"github.com/palletone/go-palletone/configure"
+	"github.com/palletone/go-palletone/core/accounts/keystore"
 	"github.com/palletone/go-palletone/dag"
+	"github.com/palletone/go-palletone/dag/modules"
+	"github.com/palletone/go-palletone/dag/palletcache"
+	"github.com/palletone/go-palletone/dag/txspool"
 	"github.com/palletone/go-palletone/internal/ptnapi"
-	"github.com/palletone/go-palletone/light/les"
+	"github.com/palletone/go-palletone/light/cors"
 )
 
 type LightPalletone struct {
@@ -54,20 +58,19 @@ type LightPalletone struct {
 	// Channel for shutting down the service
 	shutdownChan chan bool
 	// Handlers
-	peers  *peerSet
-	txPool *les.TxPool
+	peers *peerSet
+	//txPool *les.TxPool
+	txPool *txspool.TxPool
 	//blockchain      *light.LightChain
 	protocolManager *ProtocolManager
-	serverPool      *serverPool
-	//reqDist         *requestDistributor
-	//retriever       *retrieveManager
+
+	corsProtocolManager *cors.ProtocolManager
+
+	//serverPool *serverPool
 	// DB interfaces
 	dag dag.IDag
 	// DB interfaces
 	unitDb ptndb.Database // Block chain database
-
-	//bloomRequests                              chan chan *bloombits.Retrieval // Channel receiving bloom data retrieval requests
-	//bloomIndexer, chtIndexer, bloomTrieIndexer *core.ChainIndexer
 
 	ApiBackend *LesApiBackend
 
@@ -78,15 +81,19 @@ type LightPalletone struct {
 	networkId     uint64
 	netRPCService *ptnapi.PublicNetAPI
 
-	wg sync.WaitGroup
+	//	wg sync.WaitGroup
+
+	txCh  chan modules.TxPreEvent
+	txSub event.Subscription
 }
 
-func New(ctx *node.ServiceContext, config *ptn.Config) (*LightPalletone, error) {
+func New(ctx *node.ServiceContext, config *ptn.Config, protocolname string, cache palletcache.ICache) (*LightPalletone,
+	error) {
 	chainDb, err := ptn.CreateDB(ctx, config /*, "lightchaindata"*/)
 	if err != nil {
 		return nil, err
 	}
-	dag, err := dag.NewDag(chainDb)
+	dag, err := dag.NewDag(chainDb, cache, true)
 	if err != nil {
 		log.Error("PalletOne New", "NewDag err:", err)
 		return nil, err
@@ -99,7 +106,7 @@ func New(ctx *node.ServiceContext, config *ptn.Config) (*LightPalletone, error) 
 	peers := newPeerSet()
 	gasToken := config.Dag.GetGasToken()
 
-	//quitSync := make(chan struct{})
+	quitSync := make(chan struct{})
 
 	lptn := &LightPalletone{
 		config: config,
@@ -113,10 +120,6 @@ func New(ctx *node.ServiceContext, config *ptn.Config) (*LightPalletone, error) 
 		shutdownChan: make(chan bool),
 		networkId:    config.NetworkId,
 		dag:          dag,
-		//bloomRequests:    make(chan chan *bloombits.Retrieval),
-		//bloomIndexer:     eth.NewBloomIndexer(chainDb, light.BloomTrieFrequency),
-		//chtIndexer:       light.NewChtIndexer(chainDb, true),
-		//bloomTrieIndexer: light.NewBloomTrieIndexer(chainDb, true),
 	}
 
 	//lptn.relay = NewLesTxRelay(peers, leth.reqDist)
@@ -124,12 +127,15 @@ func New(ctx *node.ServiceContext, config *ptn.Config) (*LightPalletone, error) 
 	//lptn.retriever = newRetrieveManager(peers, leth.reqDist, leth.serverPool)
 	//lptn.odr = NewLesOdr(chainDb, leth.chtIndexer, leth.bloomTrieIndexer, leth.bloomIndexer, leth.retriever)
 
-	//leth.txPool = NewTxPool(leth.chainConfig, leth.blockchain, leth.relay)
-	//NewProtocolManager(config.SyncMode, config.NetworkId, gasToken, ptn.txPool,
-	//		ptn.dag, ptn.eventMux, ptn.mediatorPlugin, genesis, ptn.contractPorcessor, ptn.engine)
+	lptn.txPool = txspool.NewTxPool(config.TxPool, cache, lptn.dag, tokenengine.Instance)
 
 	if lptn.protocolManager, err = NewProtocolManager(true, lptn.peers, config.NetworkId, gasToken, nil,
-		dag, lptn.eventMux, genesis); err != nil {
+		dag, lptn.eventMux, genesis, quitSync, configure.LPSProtocol); err != nil {
+		return nil, err
+	}
+
+	if lptn.corsProtocolManager, err = cors.NewCorsProtocolManager(true, config.NetworkId, gasToken,
+		dag, lptn.eventMux, genesis, make(chan struct{})); err != nil {
 		return nil, err
 	}
 
@@ -162,40 +168,35 @@ func (s *LightDummyAPI) Mining() bool {
 // APIs returns the collection of RPC services the ethereum package offers.
 // NOTE, some of these services probably need to be moved to somewhere else.
 func (s *LightPalletone) APIs() []rpc.API {
-	return []rpc.API{}
-	/*
-		return append(ptnapi.GetAPIs(s.ApiBackend), []rpc.API{
-			{
-				Namespace: "eth",
-				Version:   "1.0",
-				Service:   &LightDummyAPI{},
-				Public:    true,
-			}, {
-				Namespace: "eth",
-				Version:   "1.0",
-				Service:   downloader.NewPublicDownloaderAPI(s.protocolManager.downloader, s.eventMux),
-				Public:    true,
-			}, {
-				Namespace: "eth",
-				Version:   "1.0",
-				Service:   filters.NewPublicFilterAPI(s.ApiBackend, true),
-				Public:    true,
-			},{
-				Namespace: "net",
-				Version:   "1.0",
-				Service:   s.netRPCService,
-				Public:    true,
-			},
-		}...)
-	*/
+	//return []rpc.API{}
+
+	return append(ptnapi.GetAPIs(s.ApiBackend), []rpc.API{
+		{
+			Namespace: "ptn",
+			Version:   "1.0",
+			Service:   &LightDummyAPI{},
+			Public:    true,
+		}, {
+			Namespace: "ptn",
+			Version:   "1.0",
+			Service:   downloader.NewPublicDownloaderAPI(s.protocolManager.downloader, s.eventMux),
+			Public:    true,
+		}, {
+			Namespace: "net",
+			Version:   "1.0",
+			Service:   s.netRPCService,
+			Public:    true,
+		},
+	}...)
+
 }
 
 //func (s *LightPalletone) ResetWithGenesisBlock(gb *types.Block) {
 //	s.blockchain.ResetWithGenesisBlock(gb)
 //}
 
-//func (s *LightPalletone) BlockChain() *light.LightChain      { return s.blockchain }
-func (s *LightPalletone) TxPool() *les.TxPool { return s.txPool }
+func (s *LightPalletone) ProtocolManager() *ProtocolManager { return s.protocolManager }
+func (s *LightPalletone) TxPool() *txspool.TxPool           { return s.txPool }
 
 //func (s *LightPalletone) Engine() consensus.Engine           { return s.engine }
 func (s *LightPalletone) LesVersion() int                    { return int(s.protocolManager.SubProtocols[0].Version) }
@@ -207,42 +208,58 @@ func (s *LightPalletone) EventMux() *event.TypeMux           { return s.eventMux
 func (s *LightPalletone) Protocols() []p2p.Protocol {
 	return s.protocolManager.SubProtocols
 }
+func (s *LightPalletone) GenesisHash() common.Hash {
+	return common.Hash{}
+}
+func (s *LightPalletone) CorsProtocols() []p2p.Protocol {
+	return s.corsProtocolManager.SubProtocols
+}
 
 // Start implements node.Service, starting all internal goroutines needed by the
 // Ethereum protocol implementation.
-func (s *LightPalletone) Start(srvr *p2p.Server) error {
+func (s *LightPalletone) Start(srvr *p2p.Server, corss *p2p.Server) error {
 	//s.startBloomHandlers()
-	log.Warn("Light client mode is an experimental feature")
+	log.Debug("Light client mode is an experimental feature")
 	s.netRPCService = ptnapi.NewPublicNetAPI(srvr, s.networkId)
-	// clients are searching for the first advertised protocol in the list
-	//protocolVersion := AdvertiseProtocolVersions[0]
-	//s.serverPool.start(srvr, lesTopic(s.blockchain.Genesis().Hash(), protocolVersion))
-	s.protocolManager.Start(s.config.LightPeers)
+	//s.protocolManager.Start(s.config.LightPeers, corss)
+	s.protocolManager.Start(s.config.LightPeers, corss, nil)
+
+	s.txCh = make(chan modules.TxPreEvent, txChanSize)
+	s.txSub = s.txPool.SubscribeTxPreEvent(s.txCh)
+	go s.txBroadcastLoop()
 	return nil
 }
 
 // Stop implements node.Service, terminating all internal goroutines used by the
 // Ethereum protocol.
 func (s *LightPalletone) Stop() error {
-	//s.odr.Stop()
-	//if s.bloomIndexer != nil {
-	//	s.bloomIndexer.Close()
-	//}
-	//if s.chtIndexer != nil {
-	//	s.chtIndexer.Close()
-	//}
-	//if s.bloomTrieIndexer != nil {
-	//	s.bloomTrieIndexer.Close()
-	//}
-	//s.blockchain.Stop()
+
 	s.protocolManager.Stop()
 	s.txPool.Stop()
+	s.txSub.Unsubscribe() // quits txBroadcastLoop
 
 	s.eventMux.Stop()
 
 	time.Sleep(time.Millisecond * 200)
 	s.unitDb.Close()
 	close(s.shutdownChan)
-
 	return nil
+}
+
+func (p *LightPalletone) GetKeyStore() *keystore.KeyStore {
+	return p.accountManager.Backends(keystore.KeyStoreType)[0].(*keystore.KeyStore)
+}
+
+func (p *LightPalletone) txBroadcastLoop() {
+	for {
+		select {
+		case event := <-p.txCh:
+			log.Debug("Light ProtocolManager", "txBroadcastLoop event.Tx", event.Tx)
+			p.protocolManager.BroadcastTx(event.Tx.Hash(), event.Tx)
+
+			// Err() channel will be closed when unsubscribing.
+		case <-p.txSub.Err():
+			return
+		}
+	}
 }

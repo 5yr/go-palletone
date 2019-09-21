@@ -26,15 +26,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
-	"io/ioutil"
-	"math/big"
-	"os"
-	"strconv"
-	"strings"
-	"time"
-	"unicode/utf8"
-
 	"github.com/golang/protobuf/proto"
 	"github.com/golang/protobuf/ptypes/timestamp"
 	"github.com/palletone/go-palletone/common"
@@ -47,6 +38,13 @@ import (
 	"github.com/spf13/viper"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
+	"io"
+	"io/ioutil"
+	"math/big"
+	"os"
+	"strconv"
+	"strings"
+	"time"
 )
 
 // Logger for the shim package.
@@ -55,13 +53,16 @@ import (
 
 var key string
 var cert string
+var GlobalStateContractId = []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+var ERROR_ONLY_SYS_CONTRACT = errors.New("Only system contract can call this function.")
 
-const (
-	minUnicodeRuneValue   = 0            //U+0000
-	maxUnicodeRuneValue   = utf8.MaxRune //U+10FFFF - maximum (and unallocated) code point
-	compositeKeyNamespace = "\x00"
-	emptyKeySubstitute    = "\x01"
-)
+//const (
+//
+//	minUnicodeRuneValue   = 0            //U+0000
+//	maxUnicodeRuneValue   = utf8.MaxRune //U+10FFFF - maximum (and unallocated) code point
+//	compositeKeyNamespace = "\x00"
+//	emptyKeySubstitute    = "\x01"
+//)
 
 // ChaincodeStub is an object passed to chaincode for shim side handling of
 // APIs.
@@ -73,12 +74,12 @@ type ChaincodeStub struct {
 	args           [][]byte
 	handler        *Handler
 	signedProposal *pb.SignedProposal
-	proposal       *pb.Proposal
+	//proposal       *pb.Proposal
 
 	// Additional fields extracted from the signedProposal
-	creator   []byte
-	transient map[string][]byte
-	binding   []byte
+	//creator   []byte
+	//transient map[string][]byte
+	//binding   []byte
 
 	decorations map[string][]byte
 }
@@ -129,7 +130,8 @@ func userChaincodeStreamGetter(name string) (PeerChaincodeStream, error) {
 	// Establish stream with validating peer
 	stream, err := chaincodeSupportClient.Register(context.Background())
 	if err != nil {
-		return nil, errors.WithMessage(err, fmt.Sprintf("error chatting with leader at address=%s", getPeerAddress()))
+		return nil, errors.WithMessage(err, fmt.Sprintf("error chatting with leader at address=%s",
+			getPeerAddress()))
 	}
 	return stream, nil
 }
@@ -187,7 +189,8 @@ func Start(cc Chaincode) error {
 //		if err == nil {
 //			flogging.InitFromSpec(chaincodeLogLevelString)
 //		} else {
-//			log.Warningf("Error: '%s' for chaincode log level: %s; defaulting to %s", err, chaincodeLogLevelString, flogging.DefaultLevel())
+//			log.Warningf("Error: '%s' for chaincode log level: %s; defaulting to %s", err, chaincodeLogLevelString,
+// flogging.DefaultLevel())
 //			flogging.InitFromSpec(flogging.DefaultLevel())
 //		}
 //	}
@@ -212,7 +215,8 @@ func Start(cc Chaincode) error {
 
 // StartInProc is an entry point for system chaincodes bootstrap. It is not an
 // API for chaincodes.
-func StartInProc(env []string, args []string, cc Chaincode, recv <-chan *pb.ChaincodeMessage, send chan<- *pb.ChaincodeMessage) error {
+func StartInProc(env []string, args []string, cc Chaincode, recv <-chan *pb.ChaincodeMessage,
+	send chan<- *pb.ChaincodeMessage) error {
 	log.Debugf("in proc %v", args)
 	var chaincodename string
 	for _, v := range env {
@@ -267,11 +271,12 @@ func chatWithPeer(chaincodename string, stream PeerChaincodeStream, cc Chaincode
 	chaincodeID := &pb.ChaincodeID{Name: chaincodename}
 	payload, err := proto.Marshal(chaincodeID)
 	if err != nil {
-		return errors.Wrap(err, "error marshalling chaincodeID during chaincode registration")
+		return errors.Wrap(err, "error marshaling chaincodeID during chaincode registration")
 	}
 	// Register on the stream
 	log.Debugf("Registering.. sending %s", pb.ChaincodeMessage_REGISTER)
-	if err = handler.serialSend(&pb.ChaincodeMessage{Type: pb.ChaincodeMessage_REGISTER, Payload: payload}); err != nil {
+	err = handler.serialSend(&pb.ChaincodeMessage{Type: pb.ChaincodeMessage_REGISTER, Payload: payload})
+	if err != nil {
 		return errors.WithMessage(err, "error sending chaincode REGISTER")
 	}
 	waitc := make(chan struct{})
@@ -301,7 +306,7 @@ func chatWithPeer(chaincodename string, stream PeerChaincodeStream, cc Chaincode
 					continue
 				}
 				//no, bail
-				err = errors.Wrap(sendErr, fmt.Sprintf("error sending %s", in.Type.String()))
+				err = errors.Wrap(sendErr, fmt.Sprintf("error sending type nil"))
 				return
 			case in = <-msgAvail:
 				if err == io.EOF {
@@ -321,6 +326,7 @@ func chatWithPeer(chaincodename string, stream PeerChaincodeStream, cc Chaincode
 			case nsInfo = <-handler.nextState:
 				in = nsInfo.msg
 				if in == nil {
+					log.Debugf("nil msg")
 					panic("nil msg")
 				}
 				log.Debugf("[%s]Move state message %s", shorttxid(in.Txid), in.Type.String())
@@ -348,7 +354,8 @@ func chatWithPeer(chaincodename string, stream PeerChaincodeStream, cc Chaincode
 
 // -- init stub ---
 // ChaincodeInvocation functionality
-func (stub *ChaincodeStub) init(handler *Handler, contractid []byte, channelId string, txid string, input *pb.ChaincodeInput, signedProposal *pb.SignedProposal) error {
+func (stub *ChaincodeStub) init(handler *Handler, contractid []byte, channelId string, txid string,
+	input *pb.ChaincodeInput, signedProposal *pb.SignedProposal) error {
 	stub.TxID = txid
 	stub.ChannelId = channelId
 	stub.args = input.Args
@@ -395,6 +402,15 @@ func (stub *ChaincodeStub) GetState(key string) ([]byte, error) {
 	collection := ""
 	return stub.handler.handleGetState(collection, key, stub.ContractId, stub.ChannelId, stub.TxID)
 }
+func (stub *ChaincodeStub) GetGlobalState(key string) ([]byte, error) {
+	return stub.handler.handleGetState("", key, GlobalStateContractId, stub.ChannelId, stub.TxID)
+
+}
+func (stub *ChaincodeStub) GetContractState(contractAddr common.Address, key string) ([]byte, error) {
+	contractId := contractAddr.Bytes()
+	return stub.handler.handleGetState("", key, contractId, stub.ChannelId, stub.TxID)
+}
+
 func (stub *ChaincodeStub) GetStateByPrefix(prefix string) ([]*modules.KeyValue, error) {
 	return stub.handler.handelGetStateByPrefix(prefix, stub.ContractId, stub.ChannelId, stub.TxID)
 }
@@ -406,44 +422,42 @@ func (stub *ChaincodeStub) PutState(key string, value []byte) error {
 	}
 	// Access public data by setting the collection to empty string
 	collection := ""
-	return stub.handler.handlePutState(collection, key, value, stub.ChannelId, stub.TxID)
+	return stub.handler.handlePutState(collection, nil, key, value, stub.ChannelId, stub.TxID)
+}
+func (stub *ChaincodeStub) PutGlobalState(key string, value []byte) error {
+	if key == "" {
+		return errors.New("key must not be an empty string")
+	}
+	if !common.IsSystemContractAddress(stub.ContractId) {
+		return ERROR_ONLY_SYS_CONTRACT
+	}
+	// Access public data by setting the collection to empty string
+	collection := ""
+	return stub.handler.handlePutState(collection, GlobalStateContractId, key, value, stub.ChannelId, stub.TxID)
+
 }
 
 // DelState documentation can be found in interfaces.go
 func (stub *ChaincodeStub) DelState(key string) error {
 	// Access public data by setting the collection to empty string
 	collection := ""
-	return stub.handler.handleDelState(collection, key, stub.ChannelId, stub.TxID)
+	return stub.handler.handleDelState(collection, nil, key, stub.ChannelId, stub.TxID)
+}
+func (stub *ChaincodeStub) DelGlobalState(key string) error {
+	if !common.IsSystemContractAddress(stub.ContractId) {
+		return ERROR_ONLY_SYS_CONTRACT
+	}
+	return stub.handler.handleDelState("", GlobalStateContractId, key, stub.ChannelId, stub.TxID)
+
 }
 
-// Query documentation can be found in interfaces.go
-func (stub *ChaincodeStub) OutChainAddress(outChainName string, params []byte) ([]byte, error) {
+func (stub *ChaincodeStub) OutChainCall(outChainName string, method string, params []byte) ([]byte, error) {
 	if outChainName == "" {
 		return nil, errors.New("outChainName must not be an empty string")
 	}
 	// Access public data by setting the collection to empty string
 	collection := ""
-	return stub.handler.handleOutAddress(collection, outChainName, params, stub.ChannelId, stub.TxID)
-}
-
-// Query documentation can be found in interfaces.go
-func (stub *ChaincodeStub) OutChainTransaction(outChainName string, params []byte) ([]byte, error) {
-	if outChainName == "" {
-		return nil, errors.New("outChainName must not be an empty string")
-	}
-	// Access public data by setting the collection to empty string
-	collection := ""
-	return stub.handler.handleOutTransaction(collection, outChainName, params, stub.ChannelId, stub.TxID)
-}
-
-// Query documentation can be found in interfaces.go
-func (stub *ChaincodeStub) OutChainQuery(outChainName string, params []byte) ([]byte, error) {
-	if outChainName == "" {
-		return nil, errors.New("outChainName must not be an empty string")
-	}
-	// Access public data by setting the collection to empty string
-	collection := ""
-	return stub.handler.handleOutQuery(collection, outChainName, params, stub.ChannelId, stub.TxID)
+	return stub.handler.handleOutCall(collection, outChainName, method, params, stub.ChannelId, stub.TxID)
 }
 
 func (stub *ChaincodeStub) SendJury(msgType uint32, consultContent []byte, myAnswer []byte) ([]byte, error) {
@@ -489,9 +503,12 @@ func (stub *ChaincodeStub) GetFunctionAndParameters() (function string, params [
 }
 
 //GetInvokeParameters documentation can be found in interfaces.go
-func (stub *ChaincodeStub) GetInvokeParameters() (invokeAddr common.Address, invokeTokens []*modules.InvokeTokens, invokeFees *modules.AmountAsset, funcName string, params []string, err error) {
+func (stub *ChaincodeStub) GetInvokeParameters() (invokeAddr common.Address, invokeTokens []*modules.InvokeTokens,
+	invokeFees *modules.AmountAsset, funcName string, params []string, err error) {
 	allargs := stub.args
-	//if len(allargs) > 2 {
+	if len(allargs) <= 0 {
+		return
+	}
 	invokeInfo := &modules.InvokeInfo{}
 	err = json.Unmarshal(allargs[0], invokeInfo)
 	if err != nil {
@@ -500,13 +517,21 @@ func (stub *ChaincodeStub) GetInvokeParameters() (invokeAddr common.Address, inv
 	invokeAddr = invokeInfo.InvokeAddress
 	invokeTokens = invokeInfo.InvokeTokens
 	invokeFees = invokeInfo.InvokeFees
+	if len(allargs) < 2 {
+		return
+	}
 	strargs := make([]string, 0, len(allargs)-1)
 	for _, barg := range allargs[1:] {
 		strargs = append(strargs, string(barg))
 	}
-	funcName = strargs[0]
-	params = strargs[1:]
-	//}
+	if len(strargs) < 2 {
+		return
+	}
+	funcName = strargs[1]
+	if len(strargs) < 3 {
+		return
+	}
+	params = strargs[2:]
 	return
 }
 
@@ -535,7 +560,8 @@ func (stub *ChaincodeStub) GetTxTimestamp(rangeNumber uint32) (*timestamp.Timest
 
 		return chdr.GetTimestamp(), nil
 	*/
-	headerTime, err := stub.handler.handleGetTimestamp("", rangeNumber, stub.ContractId, stub.ChannelId, stub.TxID)
+	headerTime, err := stub.handler.handleGetTimestamp("", rangeNumber, stub.ContractId, stub.ChannelId,
+		stub.TxID)
 	if err != nil {
 		return nil, errors.New("handleGetState failed")
 	}
@@ -556,8 +582,9 @@ func (stub *ChaincodeStub) SetEvent(name string, payload []byte) error {
 }
 
 //---------- Deposit API ----------
-func (stub *ChaincodeStub) GetSystemConfig(key string) (string, error) {
-	return stub.handler.handleGetSystemConfig(key, stub.ChannelId, stub.TxID)
+//func (stub *ChaincodeStub) GetSystemConfig(key string) (string, error) {
+func (stub *ChaincodeStub) GetSystemConfig() (*modules.GlobalProperty, error) {
+	return stub.handler.handleGetSystemConfig(stub.ChannelId, stub.TxID)
 }
 func (stub *ChaincodeStub) GetInvokeAddress() (common.Address, error) {
 	invokeAddr, _, _, _, _, err := stub.GetInvokeParameters()
@@ -575,8 +602,7 @@ func (stub *ChaincodeStub) GetInvokeFees() (*modules.AmountAsset, error) {
 	return invokeFees, err
 }
 func (stub *ChaincodeStub) GetContractID() ([]byte, string) {
-	addr := new(common.Address)
-	addr.SetBytes(stub.ContractId)
+	addr := common.NewAddress(stub.ContractId, common.ContractHash)
 	return stub.ContractId, addr.Str()
 }
 
@@ -586,19 +612,26 @@ func (stub *ChaincodeStub) GetTokenBalance(address string, token *modules.Asset)
 }
 
 func (stub *ChaincodeStub) DefineToken(tokenType byte, define []byte, creator string) error {
+	if !common.IsSystemContractAddress(stub.ContractId) {
+		return ERROR_ONLY_SYS_CONTRACT
+	}
 	return stub.handler.handleDefineToken(tokenType, define, creator, stub.ContractId, stub.ChannelId, stub.TxID)
 }
 
 //增发一种之前已经定义好的Token
 //如果是ERC20增发，则uniqueId为空，如果是ERC721增发，则必须指定唯一的uniqueId
 func (stub *ChaincodeStub) SupplyToken(assetId []byte, uniqueId []byte, amt uint64, creator string) error {
+	if !common.IsSystemContractAddress(stub.ContractId) {
+		return ERROR_ONLY_SYS_CONTRACT
+	}
 	return stub.handler.handleSupplyToken(assetId, uniqueId, amt, creator, stub.ContractId, stub.ChannelId, stub.TxID)
 }
 
 //将合约上锁定的某种Token支付出去
-func (stub *ChaincodeStub) PayOutToken(addr string, invokeTokens *modules.InvokeTokens, lockTime uint32) error {
+func (stub *ChaincodeStub) PayOutToken(addr string, invokeTokens *modules.AmountAsset, lockTime uint32) error {
 	//TODO Devin return stub.handler.handlePayOutToken(  stub.ContractId, stub.ChannelId, stub.TxID)
-	return stub.handler.handlePayOutToken("", addr, invokeTokens, lockTime, stub.ContractId, stub.ChannelId, stub.TxID)
+	return stub.handler.handlePayOutToken("", addr, invokeTokens, lockTime, stub.ContractId, stub.ChannelId,
+		stub.TxID)
 }
 
 // 根据证书ID获得证书字节数据，不包含BEGIN和EN两行字符
@@ -606,12 +639,27 @@ func (stub *ChaincodeStub) GetRequesterCert() (certBytes []byte, err error) {
 	if len(stub.args) <= 1 {
 		return nil, fmt.Errorf("args error: has no cert info")
 	}
-	certID := big.Int{}
-	certID.SetBytes(stub.args[1])
-	key := dagConstants.CERT_BYTES_SYMBOL + certID.String()
+	// query cert bytes
+	intCertID := new(big.Int).SetBytes(stub.args[1])
+	if intCertID == nil {
+		return nil, fmt.Errorf("certid bytes error")
+	}
+	// check ca state
+	caCert, err := stub.handler.handleGetCACert(stub.ChannelId, stub.TxID)
+	if err != nil {
+		return nil, fmt.Errorf("query ca certificate error (%s)", err.Error())
+	}
+	if caCert.SerialNumber.String() == intCertID.String() {
+		return caCert.Raw, nil
+	}
+	// other certs
+	key := dagConstants.CERT_BYTES_SYMBOL + intCertID.String()
 	resBytes, err := stub.handler.handleGetCertState(key, stub.ChannelId, stub.TxID)
 	if err != nil {
 		return nil, err
+	}
+	if len(resBytes) <= 0 {
+		return nil, fmt.Errorf("query no cert bytes for certid(%s)", intCertID.String())
 	}
 	certDBInfo := modules.CertBytesInfo{}
 	if err := json.Unmarshal(resBytes, &certDBInfo); err != nil {
@@ -620,19 +668,16 @@ func (stub *ChaincodeStub) GetRequesterCert() (certBytes []byte, err error) {
 	return certDBInfo.Raw, nil
 }
 
-func (stub *ChaincodeStub) IsRequesterCertValidate() (bool, error) {
+func (stub *ChaincodeStub) IsRequesterCertValid() (bool, error) {
 	if len(stub.args) <= 1 {
 		return false, fmt.Errorf("args error: has no cert info")
 	}
-	certID := big.Int{}
-	certID.SetBytes(stub.args[1])
-	key := dagConstants.CERT_BYTES_SYMBOL + certID.String()
 	caller, err := stub.GetInvokeAddress()
 	if err != nil {
 		return false, err
 	}
 
-	return stub.handler.handlerCheckCertValidation(caller.String(), key, stub.ChannelId, stub.TxID)
+	return stub.handler.handlerCheckCertValidation(caller.String(), stub.args[1], stub.ChannelId, stub.TxID)
 }
 
 // ------------- Logging Control and Chaincode Loggers ---------------
@@ -812,7 +857,8 @@ func (c *ChaincodeLogger) Criticalf(format string, args ...interface{}) {
 // if err != nil {
 //    return nil, err
 // }
-// return &StateQueryIterator{CommonIterator: &CommonIterator{stub.handler, stub.ChannelId, stub.TxID, response, 0}}, nil
+// return &StateQueryIterator{CommonIterator: &CommonIterator{stub.handler, stub.ChannelId, stub.TxID, response, 0}},
+// nil
 //}
 
 // CommonIterator documentation can be found in interfaces.go
@@ -846,7 +892,8 @@ func (c *ChaincodeLogger) Criticalf(format string, args ...interface{}) {
 // if err != nil {
 //    return nil, err
 // }
-// return &StateQueryIterator{CommonIterator: &CommonIterator{stub.handler, stub.ChannelId, stub.TxID, response, 0}}, nil
+// return &StateQueryIterator{CommonIterator: &CommonIterator{stub.handler, stub.ChannelId, stub.TxID, response, 0}},
+// nil
 //}
 
 // GetStateByRange documentation can be found in interfaces.go
@@ -903,7 +950,8 @@ func (c *ChaincodeLogger) Criticalf(format string, args ...interface{}) {
 // }
 // for index, runeValue := range str {
 //    if runeValue == minUnicodeRuneValue || runeValue == maxUnicodeRuneValue {
-//       return errors.Errorf(`input contain unicode %#U starting at position [%d]. %#U and %#U are not allowed in the input attribute of a composite key`,
+//       return errors.Errorf(`input contain unicode %#U starting at position [%d]. %#U and %#U are not allowed
+// in the input attribute of a composite key`,
 //          runeValue, index, minUnicodeRuneValue, maxUnicodeRuneValue)
 //    }
 // }
@@ -929,7 +977,8 @@ func (c *ChaincodeLogger) Criticalf(format string, args ...interface{}) {
 //matches the given partial composite key. This function should be used only for
 //a partial composite key. For a full composite key, an iter with empty response
 //would be returned.
-//func (stub *ChaincodeStub) GetStateByPartialCompositeKey(objectType string, attributes []string) (StateQueryIteratorInterface, error) {
+//func (stub *ChaincodeStub) GetStateByPartialCompositeKey(objectType string,
+// attributes []string) (StateQueryIteratorInterface, error) {
 // collection := ""
 // if partialCompositeKey, err := stub.CreateCompositeKey(objectType, attributes); err == nil {
 //    return stub.handleGetStateByRange(collection, partialCompositeKey, partialCompositeKey+string(maxUnicodeRuneValue))

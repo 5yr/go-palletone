@@ -11,6 +11,7 @@
 	You should have received a copy of the GNU General Public License
 	along with go-palletone.  If not, see <http://www.gnu.org/licenses/>.
 */
+
 /*
  * Copyright IBM Corp. All Rights Reserved.
  * @author PalletOne core developers <dev@pallet.one>
@@ -234,7 +235,7 @@ func (di DestroyImageReq) getCCID() ccintf.CCID {
 //   . construct req of the right type (e.g., CreateImageReq)
 //   . call it in a go routine
 //   . process response in the go routing
-//context can be cancelled. VMCProcess will try to cancel calling functions if it can
+//context can be canceled. VMCProcess will try to cancel calling functions if it can
 //For instance docker clients api's such as BuildImage are not cancelable.
 //In all cases VMCProcess will wait for the called go routine to return
 func VMCProcess(ctxt context.Context, vmtype string, req VMCReqIntf) (interface{}, error) {

@@ -22,10 +22,10 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"net"
 	"sync"
 
 	"encoding/json"
+	"github.com/coocood/freecache"
 	"github.com/palletone/go-palletone/common"
 	"github.com/palletone/go-palletone/common/event"
 	"github.com/palletone/go-palletone/common/log"
@@ -34,25 +34,16 @@ import (
 	"github.com/palletone/go-palletone/dag"
 	dagerrors "github.com/palletone/go-palletone/dag/errors"
 	"github.com/palletone/go-palletone/dag/modules"
+	"github.com/palletone/go-palletone/dag/palletcache"
 	"github.com/palletone/go-palletone/ptn/downloader"
 )
 
 const (
-	softResponseLimit = 2 * 1024 * 1024 // Target maximum size of returned blocks, headers or node data.
-	estHeaderRlpSize  = 500             // Approximate size of an RLP encoded block header
-
-	ethVersion = 63 // equivalent eth version for the downloader
-
-	MaxHeaderFetch           = 192 // Amount of block headers to be fetched per retrieval request
-	MaxBodyFetch             = 32  // Amount of block bodies to be fetched per retrieval request
-	MaxReceiptFetch          = 128 // Amount of transaction receipts to allow fetching per request
-	MaxCodeFetch             = 64  // Amount of contract codes to allow fetching per request
-	MaxProofsFetch           = 64  // Amount of merkle proofs to be fetched per retrieval request
-	MaxHelperTrieProofsFetch = 64  // Amount of merkle proofs to be fetched per retrieval request
-	MaxTxSend                = 64  // Amount of transactions to be send per request
-	MaxTxStatus              = 256 // Amount of transactions to queried per request
-
+	softResponseLimit       = 2 * 1024 * 1024 // Target maximum size of returned blocks, headers or node data.
+	estHeaderRlpSize        = 500             // Approximate size of an RLP encoded block header
+	MaxHeaderFetch          = 192             // Amount of block headers to be fetched per retrieval request
 	disableClientRemovePeer = false
+	txChanSize              = 4096
 )
 
 // errIncompatibleConfig is returned if the requested protocols and configs are
@@ -61,6 +52,13 @@ var errIncompatibleConfig = errors.New("incompatible configuration")
 
 func errResp(code errCode, format string, v ...interface{}) error {
 	return fmt.Errorf("%v - %v", code, fmt.Sprintf(format, v...))
+}
+
+type ProofReq struct {
+	BHash       common.Hash
+	AccKey, Key []byte
+	FromLevel   uint
+	Index       string
 }
 
 type BlockChain interface {
@@ -81,7 +79,7 @@ type BlockChain interface {
 
 type txPool interface {
 	AddRemotes(txs []*modules.Transaction) []error
-	//Status(hashes []common.Hash) []core.TxStatus
+	SubscribeTxPreEvent(chan<- modules.TxPreEvent) event.Subscription
 }
 
 type ProtocolManager struct {
@@ -93,22 +91,24 @@ type ProtocolManager struct {
 	dag     dag.IDag
 	assetId modules.AssetId
 	//chainDb     ethdb.Database
-	odr        *LesOdr
-	server     *LesServer
-	serverPool *serverPool
-	genesis    *modules.Unit
+	//odr        *LesOdr
+	server *LesServer
+	//serverPool *serverPool
+	genesis *modules.Unit
 	//lesTopic   discv5.Topic
-	reqDist   *requestDistributor
-	retriever *retrieveManager
+	//reqDist *requestDistributor
+	//retriever *retrieveManager
 
 	downloader *downloader.Downloader
 	fetcher    *LightFetcher
 	peers      *peerSet
 	maxPeers   int
 
-	SubProtocols []p2p.Protocol
+	fastSync uint32 //key:p.id
 
-	eventMux *event.TypeMux
+	SubProtocols     []p2p.Protocol
+	CorsSubProtocols []p2p.Protocol
+	eventMux         *event.TypeMux
 
 	// channels for fetcher, syncer, txsyncLoop
 	newPeerCh   chan *peer
@@ -118,73 +118,82 @@ type ProtocolManager struct {
 	// wait group is used for graceful shutdowns during downloading
 	// and processing
 	wg *sync.WaitGroup
+
+	//SPV
+	validation   *Validation
+	utxosync     *UtxosSync
+	protocolname string
+
+	//cors
+	//corss *p2p.Server
+
+	receivedCache palletcache.ICache
 }
 
 // NewProtocolManager returns a new ethereum sub protocol manager. The Palletone sub protocol manages peers capable
 // with the ethereum network.
 func NewProtocolManager(lightSync bool, peers *peerSet, networkId uint64, gasToken modules.AssetId, txpool txPool,
-	dag dag.IDag, mux *event.TypeMux, genesis *modules.Unit) (*ProtocolManager, error) {
+	dag dag.IDag, mux *event.TypeMux, genesis *modules.Unit, quitSync chan struct{},
+	protocolname string) (*ProtocolManager, error) {
 	// Create the protocol manager with the base fields
 	manager := &ProtocolManager{
-		lightSync: lightSync,
-		eventMux:  mux,
-		assetId:   gasToken,
-		genesis:   genesis,
-		//blockchain:  blockchain,
-		//chainConfig: chainConfig,
-		//chainDb:     chainDb,
-		//odr:         odr,
-		dag:       dag,
-		networkId: networkId,
-		txpool:    txpool,
-		//txrelay:     txrelay,
-		peers:     peers, //newPeerSet(),
-		newPeerCh: make(chan *peer),
-		//quitSync:    quitSync,
-		wg:          new(sync.WaitGroup),
-		noMorePeers: make(chan struct{}),
+		lightSync:     lightSync,
+		eventMux:      mux,
+		assetId:       gasToken,
+		genesis:       genesis,
+		quitSync:      quitSync,
+		dag:           dag,
+		networkId:     networkId,
+		txpool:        txpool,
+		protocolname:  protocolname,
+		peers:         peers,
+		newPeerCh:     make(chan *peer),
+		wg:            new(sync.WaitGroup),
+		noMorePeers:   make(chan struct{}),
+		validation:    NewValidation(dag),
+		utxosync:      NewUtxosSync(dag),
+		receivedCache: freecache.NewCache(5 * 1024 * 1024),
 	}
 
 	// Initiate a sub-protocol for every implemented version we can handle
-	protocolVersions := ClientProtocolVersions
-	manager.SubProtocols = make([]p2p.Protocol, 0, len(protocolVersions))
-	for _, version := range protocolVersions {
+	manager.SubProtocols = make([]p2p.Protocol, 0, len(ClientProtocolVersions))
+	for _, ver := range ClientProtocolVersions {
 		// Compatible, initialize the sub-protocol
-		version := version // Closure for the run
+		version := ver
 		manager.SubProtocols = append(manager.SubProtocols, p2p.Protocol{
-			Name:    "lps",
+			Name:    protocolname,
 			Version: version,
 			Length:  ProtocolLengths[version],
 			Run: func(p *p2p.Peer, rw p2p.MsgReadWriter) error {
-				var entry *poolEntry
+				//var entry *poolEntry
 				peer := manager.newPeer(int(version), networkId, p, rw)
-				if manager.serverPool != nil {
-					addr := p.RemoteAddr().(*net.TCPAddr)
-					entry = manager.serverPool.connect(peer, addr.IP, uint16(addr.Port))
-				}
-				peer.poolEntry = entry
+				//if manager.serverPool != nil {
+				//	addr := p.RemoteAddr().(*net.TCPAddr)
+				//	entry = manager.serverPool.connect(peer, addr.IP, uint16(addr.Port))
+				//}
+				//peer.poolEntry = entry
 				select {
 				case manager.newPeerCh <- peer:
 					manager.wg.Add(1)
 					defer manager.wg.Done()
 					err := manager.handle(peer)
-					if entry != nil {
-						manager.serverPool.disconnect(entry)
-					}
+					//if entry != nil {
+					//	manager.serverPool.disconnect(entry)
+					//}
 					return err
 				case <-manager.quitSync:
-					if entry != nil {
-						manager.serverPool.disconnect(entry)
-					}
+					//if entry != nil {
+					//	manager.serverPool.disconnect(entry)
+					//}
 					return p2p.DiscQuitting
 				}
 			},
 			NodeInfo: func() interface{} {
-				return manager.NodeInfo()
+				return manager.NodeInfo(genesis.Hash())
 			},
 			PeerInfo: func(id discover.NodeID) interface{} {
 				if p := manager.peers.Peer(fmt.Sprintf("%x", id[:8])); p != nil {
-					return p.Info()
+					return p.Info(manager.assetId)
 				}
 				return nil
 			},
@@ -199,55 +208,55 @@ func NewProtocolManager(lightSync bool, peers *peerSet, networkId uint64, gasTok
 		removePeer = func(id string) {}
 	}
 
-	if manager.lightSync {
-		manager.downloader = downloader.New(downloader.LightSync, manager.eventMux, removePeer, nil, dag, nil)
-		manager.peers.notify((*downloaderPeerNotify)(manager))
-		manager.fetcher = manager.newLightFetcher()
-	}
+	//if manager.lightSync {
+	manager.downloader = downloader.New(downloader.LightSync, manager.eventMux, removePeer, nil, dag,
+		nil)
+	manager.peers.notify((*downloaderPeerNotify)(manager))
+	manager.fetcher = manager.newLightFetcher()
+	//}
+
+	manager.fastSync = uint32(1)
 
 	return manager, nil
 }
 
 func (pm *ProtocolManager) newLightFetcher() *LightFetcher {
 	headerVerifierFn := func(header *modules.Header) error {
-		//hash := header.Hash()
-		//log.Debugf("Importing propagated block insert DAG Enter ValidateUnitExceptGroupSig, unit: %s", hash.String())
-		//defer log.Debugf("Importing propagated block insert DAG End ValidateUnitExceptGroupSig, unit: %s", hash.String())
-		//verr := pm.dag.ValidateUnitExceptGroupSig(unit)
-		//if verr != nil && !validator.IsOrphanError(verr) {
-		//	return dagerrors.ErrFutureBlock
-		//}
 		//TODO must modify
 		return dagerrors.ErrFutureBlock
 	}
 	headerBroadcaster := func(header *modules.Header, propagate bool) {
-		log.Info("ProtocolManager headerBroadcaster", "hash:", header.Hash().String())
-		//pm.BroadcastLocalLightHeader(header)
+		log.Info("Light PalletOne ProtocolManager headerBroadcaster", "assetid", header.Number.AssetID,
+			"index", header.Number.Index, "hash:", header.Hash().String())
+		pm.BroadcastLightHeader(header)
 	}
 	inserter := func(headers []*modules.Header) (int, error) {
 		// If fast sync is running, deny importing weird blocks
-		//TODO must add lock
-		//if pm.lightSync {
-		//	log.Warn("Discarded lighting sync propagated block", "number", headers[0].Number.Index, "hash", headers[0].Hash())
-		//	return 0, errors.New("fasting sync")
-		//}
-		log.Debug("light Fetcher", "manager.dag.InsertDag index:", headers[0].Number.Index, "hash", headers[0].Hash())
+		log.Debug("Light PalletOne ProtocolManager InsertLightHeader", "assetId", headers[0].Number.AssetID,
+			"index:", headers[0].Number.Index, "hash", headers[0].Hash())
 		return pm.dag.InsertLightHeader(headers)
 	}
-	return newLightFetcher(pm.dag.GetHeaderByHash, pm.dag.GetLightChainHeight, headerVerifierFn,
+	return NewLightFetcher(pm.dag.GetHeaderByHash, pm.dag.GetLightChainHeight, headerVerifierFn,
 		headerBroadcaster, inserter, pm.removePeer)
 }
 
-func (pm *ProtocolManager) BroadcastLocalLightHeader(header *modules.Header) {
-	log.Info("ProtocolManager", "BroadcastLightHeader index:", header.Index(), "sub protocal name:", header.Number.AssetID.String())
-	//
-	//hash := header.Hash()
-	//peers := pm.peers.PeersWithoutLightHeader(hash)
-	//for _, peer := range peers {
-	//	peer.SendLightHeader(header)
-	//}
-	//log.Trace("BroadcastLightHeader Propagated header", "protocalname", pm.SubProtocols[0].Name, "index:", header.Number.Index, "hash", hash, "recipients", len(peers))
-	return
+func (pm *ProtocolManager) BroadcastLightHeader(header *modules.Header) {
+	//peers := pm.peers.PeersWithoutHeader(header.Number.AssetID, header.Hash())
+	peers := pm.peers.AllPeers(header.Number.AssetID)
+	announce := announceData{Hash: header.Hash(), Number: *header.Number, Header: *header}
+	log.Debug("Light PalletOne ProtocolManager BroadcastLightHeader", "index:", header.Index(),
+		"assetId:", header.Number.AssetID.String(), "len(peers)", len(peers))
+	for _, p := range peers {
+		if p == nil {
+			continue
+		}
+		if !p.fullnode && header.Number.AssetID != pm.assetId {
+			log.Debug("Light PalletOne ProtocolManager BroadcastLightHeader", "p.id", p.id)
+			continue
+		}
+		//log.Debug("Light PalletOne ProtocolManager BroadcastLightHeader", "announceType", p.announceType)
+		p.announceChn <- announce
+	}
 }
 
 // removePeer initiates disconnection from a peer by removing it from the peer set
@@ -255,11 +264,12 @@ func (pm *ProtocolManager) removePeer(id string) {
 	pm.peers.Unregister(id)
 }
 
-func (pm *ProtocolManager) Start(maxPeers int) {
+func (pm *ProtocolManager) Start(maxPeers int, corss *p2p.Server, syncCh chan bool) {
 	pm.maxPeers = maxPeers
+	go pm.syncer(syncCh)
 
 	if pm.lightSync {
-		go pm.syncer()
+		pm.validation.Start()
 	} else {
 		go func() {
 			for range pm.newPeerCh {
@@ -287,12 +297,36 @@ func (pm *ProtocolManager) Stop() {
 
 	// Wait for any process action
 	pm.wg.Wait()
+	pm.validation.Stop()
 
 	log.Info("Light Palletone protocol stopped")
 }
 
 func (pm *ProtocolManager) newPeer(pv int, nv uint64, p *p2p.Peer, rw p2p.MsgReadWriter) *peer {
 	return newPeer(pv, nv, p, newMeteredMsgWriter(rw))
+}
+
+func (pm *ProtocolManager) getcorsinfo() [][][]byte {
+	var datas [][][]byte
+	if headers, err := pm.dag.GetAllLeafNodes(); err != nil {
+		return datas
+	} else {
+		for _, header := range headers {
+			var data [][]byte
+			data = append(data, header.Hash().Bytes())
+			data = append(data, header.Number.Bytes())
+			datas = append(datas, data)
+		}
+	}
+	return datas
+}
+
+func (pm *ProtocolManager) IsExistInCache(id []byte) bool {
+	_, err := pm.receivedCache.Get(id)
+	if err != nil { //Not exist, add it!
+		pm.receivedCache.Set(id, nil, 60*5)
+	}
+	return err == nil
 }
 
 // handle is the callback invoked to manage the life cycle of a les peer. When
@@ -302,21 +336,12 @@ func (pm *ProtocolManager) handle(p *peer) error {
 	if pm.peers.Len() >= pm.maxPeers && !p.Peer.Info().Network.Trusted {
 		return p2p.DiscTooManyPeers
 	}
+	log.Debug("Light Palletone peer connected", "id", p.ID())
 
-	log.Debug("Light Palletone peer connected", "name", p.Name())
-
-	// Execute the LES handshake
-	//var (
-	//	head   = pm.dag.CurrentHeader(pm.assetId)
-	//	number = head.Number
-	//	//td     = pm.blockchain.GetTd(hash, number)
-	//)
 	genesis, err := pm.dag.GetGenesisUnit()
 	if err != nil {
-		if err != nil {
-			log.Error("Light PalletOne New", "get genesis err:", err)
-			return err
-		}
+		log.Error("Light PalletOne New", "get genesis err:", err)
+		return err
 	}
 
 	var (
@@ -327,10 +352,12 @@ func (pm *ProtocolManager) handle(p *peer) error {
 		number = head.Number
 		headhash = head.Hash()
 	}
-	if err := p.Handshake(number, genesis.Hash(), pm.server, headhash); err != nil {
+
+	if err := p.Handshake(number, genesis.Hash(), pm.server, headhash, pm.getcorsinfo()); err != nil {
 		log.Debug("Light Palletone handshake failed", "err", err)
 		return err
 	}
+
 	if rw, ok := p.rw.(*meteredMsgReadWriter); ok {
 		rw.Init(p.version)
 	}
@@ -346,18 +373,11 @@ func (pm *ProtocolManager) handle(p *peer) error {
 		pm.removePeer(p.id)
 	}()
 	// Register the peer in the downloader. If the downloader considers it banned, we disconnect
-	if pm.lightSync {
-		p.lock.Lock()
-		//head := p.headInfo
-		p.lock.Unlock()
-		if pm.fetcher != nil {
-			//pm.fetcher.announce(p, head)
-		}
-
-		if p.poolEntry != nil {
-			pm.serverPool.registered(p.poolEntry)
-		}
-	}
+	//if pm.lightSync {
+	//	if p.poolEntry != nil {
+	//		pm.serverPool.registered(p.poolEntry)
+	//	}
+	//}
 
 	stop := make(chan struct{})
 	defer close(stop)
@@ -366,28 +386,30 @@ func (pm *ProtocolManager) handle(p *peer) error {
 		for {
 			select {
 			case announce := <-p.announceChn:
-				log.Debug("Light Palletone ProtocolManager->handle", "announce", announce)
-				//data, err := rlp.EncodeToBytes(announce)
-				//if err != nil {
-				//	log.Error("rlp.EncodeToBytes", "err", err)
-				//	return
-				//}
-				//log.Debug("Light Palletone ProtocolManager->handle", "announce bytes", data)
-				//var req announceData
-				//err = rlp.DecodeBytes(data, &req)
-				//if err != nil {
-				//	log.Error("rlp.DecodeBytes", "err", err)
-				//	return
-				//}
-				data, err := json.Marshal(announce)
+				log.Debug("Light Palletone ProtocolManager->handle", "assetId", announce.Header.Number.AssetID,
+					"index", announce.Header.Number.Index)
+				data, err := json.Marshal(announce.Header)
 				if err != nil {
-					log.Error("Light Palletone ProtocolManager->handle", "Marshal err", err, "announce", announce)
+					log.Error("Light Palletone ProtocolManager->handle", "Marshal err", err,
+						"announce", announce)
 				} else {
-					p.SendRawAnnounce(data)
+					p.lightlock.Lock()
+					announce.Hash = announce.Header.Hash()
+					announce.Number = *announce.Header.Number
+					p.lightpeermsg[announce.Number.AssetID] = &announce
+					p.lightlock.Unlock()
+
+					//if announce.Number.AssetID != modules.PTNCOIN {
+					if pm.assetId != announce.Number.AssetID {
+						log.Debug("Light PalletOne ProtocolManager SendRawAnnounce",
+							"assetid", announce.Number.AssetID, "index", announce.Number.Index)
+						p.SendRawAnnounce(data)
+					} else {
+						if !p.fullnode {
+							p.SendRawAnnounce(data)
+						}
+					}
 				}
-				//if err := p.SendRawAnnounce(announce); err != nil {
-				//	log.Error("Light Palletone ProtocolManager->handle", "SendAnnounce err", err)
-				//}
 			case <-stop:
 				return
 			}
@@ -397,13 +419,11 @@ func (pm *ProtocolManager) handle(p *peer) error {
 	// main loop. handle incoming messages.
 	for {
 		if err := pm.handleMsg(p); err != nil {
-			log.Debug("Light Palletone message handling failed", "err", err)
+			log.Debug("Light PalletOne message handling failed", "err", err)
 			return err
 		}
 	}
 }
-
-var reqList = []uint64{GetBlockHeadersMsg, GetBlockBodiesMsg, GetCodeMsg, GetReceiptsMsg, GetProofsV1Msg, SendTxMsg, SendTxV2Msg, GetTxStatusMsg, GetHeaderProofsMsg, GetProofsV2Msg, GetHelperTrieProofsMsg}
 
 // handleMsg is invoked whenever an inbound message is received from a remote
 // peer. The remote connection is torn down upon returning any error.
@@ -414,24 +434,6 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 		return err
 	}
 	log.Trace("Light Palletone message arrived", "code", msg.Code, "bytes", msg.Size)
-
-	//costs := p.fcCosts[msg.Code]
-	//reject := func(reqCnt, maxCnt uint64) bool {
-	//	if p.fcClient == nil || reqCnt > maxCnt {
-	//		return true
-	//	}
-	//	bufValue, _ := p.fcClient.AcceptRequest()
-	//	cost := costs.baseCost + reqCnt*costs.reqCost
-	//	if cost > pm.server.defParams.BufLimit {
-	//		cost = pm.server.defParams.BufLimit
-	//	}
-	//	if cost > bufValue {
-	//		recharge := time.Duration((cost - bufValue) * 1000000 / pm.server.defParams.MinRecharge)
-	//		log.Error("Request came too early", "recharge", common.PrettyDuration(recharge))
-	//		return true
-	//	}
-	//	return false
-	//}
 
 	if msg.Size > ProtocolMaxMsgSize {
 		return errResp(ErrMsgTooLarge, "%v > %v", msg.Size, ProtocolMaxMsgSize)
@@ -457,150 +459,73 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 	case BlockHeadersMsg:
 		return pm.BlockHeadersMsg(msg, p)
 
-	case GetBlockBodiesMsg:
-		return nil //pm.GetBlockBodiesMsg(msg, p)
+	case GetProofsMsg:
+		return pm.GetProofsMsg(msg, p)
 
-	case BlockBodiesMsg:
-		return nil //pm.BlockBodiesMsg(msg, p)
+	case GetUTXOsMsg:
+		return pm.GetUTXOsMsg(msg, p)
 
-	case GetCodeMsg:
-		return nil //pm.GetCodeMsg(msg, p)
+	case UTXOsMsg:
+		return pm.UTXOsMsg(msg, p)
 
-	case CodeMsg:
-		return nil //pm.CodeMsg(msg, p)
-
-	case GetProofsV1Msg:
-		return nil //pm.GetProofsMsg(msg, p)
-
-	case GetProofsV2Msg:
-		log.Trace("Received les/2 proofs request")
-
-	case ProofsV1Msg:
-		return nil //pm.ProofsMsg(msg, p)
-
-	case ProofsV2Msg:
-		log.Trace("Received les/2 proofs response")
-
-	case GetHeaderProofsMsg:
-		return nil //pm.GetHeaderProofsMsg(msg, p)
-
-	case GetHelperTrieProofsMsg:
-		return nil //pm.GetHelperTrieProofsMsg(msg, p)
-
-	case HeaderProofsMsg:
-		return nil // pm.HeaderProofsMsg(msg, p)
-
-	case HelperTrieProofsMsg:
-		return nil //pm.HelperTrieProofsMsg(msg, p)
+	case ProofsMsg:
+		return pm.ProofsMsg(msg, p)
 
 	case SendTxMsg:
-		return nil //pm.SendTxMsg(msg, p)
+		return pm.SendTxMsg(msg, p)
 
-	case SendTxV2Msg:
+	case GetLeafNodesMsg:
+		return pm.GetLeafNodesMsg(msg, p)
 
-	case GetTxStatusMsg:
-		return nil //pm.GetTxStatusMsg(msg, p)
-
-	case TxStatusMsg:
-		return nil //pm.TxStatusMsg(msg, p)
+	case LeafNodesMsg:
+		return pm.LeafNodesMsg(msg, p)
 
 	default:
 		log.Trace("Received unknown message", "code", msg.Code)
 		return errResp(ErrInvalidMsgCode, "%v", msg.Code)
 	}
-
-	//if deliverMsg != nil {
-	//	err := pm.retriever.deliver(p, deliverMsg)
-	//	if err != nil {
-	//		p.responseErrors++
-	//		if p.responseErrors > maxResponseErrors {
-	//			return err
-	//		}
-	//	}
-	//}
-	return nil
 }
 
-/*
-// getAccount retrieves an account from the state based at root.
-func (pm *ProtocolManager) getAccount(statedb *state.StateDB, root, hash common.Hash) (state.Account, error) {
-	trie, err := trie.New(root, statedb.Database().TrieDB())
-	if err != nil {
-		return state.Account{}, err
+func (pm *ProtocolManager) BroadcastTx(hash common.Hash, tx *modules.Transaction) {
+	// Broadcast transaction to a batch of peers not knowing about it
+	peers := pm.peers.AllPeers(pm.assetId)
+	//FIXME include this again: peers = peers[:int(math.Sqrt(float64(len(peers))))]
+	for _, peer := range peers {
+		peer.SendTxs(0, 0, modules.Transactions{tx})
 	}
-	blob, err := trie.TryGet(hash[:])
-	if err != nil {
-		return state.Account{}, err
-	}
-	var account state.Account
-	if err = rlp.DecodeBytes(blob, &account); err != nil {
-		return state.Account{}, err
-	}
-	return account, nil
+	log.Trace("Broadcast transaction", "hash", hash, "recipients", len(peers))
 }
 
-// getHelperTrie returns the post-processed trie root for the given trie ID and section index
-func (pm *ProtocolManager) getHelperTrie(id uint, idx uint64) (common.Hash, string) {
-	switch id {
-	case htCanonical:
-		sectionHead := core.GetCanonicalHash(pm.chainDb, (idx+1)*light.CHTFrequencyClient-1)
-		return light.GetChtV2Root(pm.chainDb, idx, sectionHead), light.ChtTablePrefix
-	case htBloomBits:
-		sectionHead := core.GetCanonicalHash(pm.chainDb, (idx+1)*light.BloomTrieFrequency-1)
-		return light.GetBloomTrieRoot(pm.chainDb, idx, sectionHead), light.BloomTrieTablePrefix
-	}
-	return common.Hash{}, ""
-}
-
-// getHelperTrieAuxData returns requested auxiliary data for the given HelperTrie request
-func (pm *ProtocolManager) getHelperTrieAuxData(req HelperTrieReq) []byte {
-	switch {
-	case req.Type == htCanonical && req.AuxReq == auxHeader && len(req.Key) == 8:
-		blockNum := binary.BigEndian.Uint64(req.Key)
-		hash := core.GetCanonicalHash(pm.chainDb, blockNum)
-		return core.GetHeaderRLP(pm.chainDb, hash, blockNum)
-	}
-	return nil
-}
-
-func (pm *ProtocolManager) txStatus(hashes []common.Hash) []txStatus {
-	stats := make([]txStatus, len(hashes))
-	for i, stat := range pm.txpool.Status(hashes) {
-		// Save the status we've got from the transaction pool
-		stats[i].Status = stat
-
-		// If the transaction is unknown to the pool, try looking it up locally
-		if stat == core.TxStatusUnknown {
-			if block, number, index := core.GetTxLookupEntry(pm.chainDb, hashes[i]); block != (common.Hash{}) {
-				stats[i].Status = core.TxStatusIncluded
-				stats[i].Lookup = &core.TxLookupEntry{BlockHash: block, BlockIndex: number, Index: index}
-			}
-		}
-	}
-	return stats
-}
-*/
 // NodeInfo represents a short summary of the Palletone sub-protocol metadata
 // known about the host peer.
 type NodeInfo struct {
 	Network uint64      `json:"network"` // Palletone network ID (1=Frontier, 2=Morden, Ropsten=3, Rinkeby=4)
-	Number  uint64      `json:"number"`  // Total difficulty of the host's blockchain
+	Index   uint64      `json:"Index"`   // Total difficulty of the host's blockchain
 	Head    common.Hash `json:"head"`    // SHA3 hash of the host's best owned block
-	//Genesis    common.Hash         `json:"genesis"`    // SHA3 hash of the host's genesis block
+	Genesis common.Hash `json:"genesis"` // SHA3 hash of the host's genesis block
 	//Config     *params.ChainConfig `json:"config"`     // Chain configuration for the fork rules
 }
 
 // NodeInfo retrieves some protocol metadata about the running host node.
-func (self *ProtocolManager) NodeInfo() *NodeInfo {
-	//head := self.blockchain.CurrentHeader()
-	//hash := head.Hash()
+func (pm *ProtocolManager) NodeInfo(genesisHash common.Hash) *NodeInfo {
+	header := pm.dag.CurrentHeader(pm.assetId)
+
+	var (
+		index = uint64(0)
+		hash  = common.Hash{}
+	)
+	if header != nil {
+		index = header.Number.Index
+		hash = header.Hash()
+	} else {
+		log.Debug("Light PalletOne NodeInfo header is nil")
+	}
 
 	return &NodeInfo{
-		Network: self.networkId,
-		Number:  uint64(0),
-		//Genesis:    self.blockchain.Genesis().Hash(),
-		//Config:     self.blockchain.Config(),
-		//Head: hash,
+		Network: pm.networkId,
+		Index:   index,
+		Genesis: genesisHash,
+		Head:    hash,
 	}
 }
 
@@ -618,27 +543,30 @@ type peerConnection struct {
 //RequestLeafNodes() error
 
 func (pc *peerConnection) Head(assetId modules.AssetId) (common.Hash, *modules.ChainIndex) {
-	return common.Hash{}, nil
-	// return pc.peer.HeadAndTd()
+	//return common.Hash{}, nil
+	return pc.peer.HeadAndNumber(assetId)
 }
 
 func (pc *peerConnection) RequestHeadersByHash(origin common.Hash, amount int, skip int, reverse bool) error {
-	return nil
+	log.Debug("peerConnection batch of headers by hash", "count", amount, "fromhash", origin,
+		"skip", skip, "reverse", reverse)
+	return p2p.Send(pc.peer.rw, GetBlockHeadersMsg, &getBlockHeadersData{Origin: hashOrNumber{Hash: origin},
+		Amount: uint64(amount), Skip: uint64(skip), Reverse: reverse})
 }
 
 func (pc *peerConnection) RequestHeadersByNumber(origin *modules.ChainIndex, amount int, skip int, reverse bool) error {
-	return nil
+	log.Debug("peerConnection batch of headers by number", "count", amount, "from origin", origin,
+		"skip", skip, "reverse", reverse)
+	return p2p.Send(pc.peer.rw, GetBlockHeadersMsg, &getBlockHeadersData{Origin: hashOrNumber{Number: *origin},
+		Amount: uint64(amount), Skip: uint64(skip), Reverse: reverse})
 }
 func (p *peerConnection) RequestDagHeadersByHash(origin common.Hash, amount int, skip int, reverse bool) error {
-	//log.Debug("Fetching batch of headers", "count", amount, "fromhash", origin, "skip", skip, "reverse", reverse)
 	return nil
 }
 
 func (p *peerConnection) RequestLeafNodes() error {
-	//GetLeafNodes
 	log.Debug("Fetching leaf nodes")
-	return nil
-	//return p2p.Send(p.rw, GetLeafNodesMsg, "")
+	return p2p.Send(p.peer.rw, GetLeafNodesMsg, "")
 }
 
 func (d *downloaderPeerNotify) registerPeer(p *peer) {
@@ -647,7 +575,7 @@ func (d *downloaderPeerNotify) registerPeer(p *peer) {
 		manager: pm,
 		peer:    p,
 	}
-	pm.downloader.RegisterLightPeer(p.id, ethVersion, pc)
+	pm.downloader.RegisterLightPeer(p.id, p.version, pc)
 }
 
 func (d *downloaderPeerNotify) unregisterPeer(p *peer) {

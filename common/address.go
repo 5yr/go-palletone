@@ -23,7 +23,7 @@ import (
 	"fmt"
 	// "math/big"
 	// "math/rand"
-	"reflect"
+	//"reflect"
 	// "strings"
 
 	"math/big"
@@ -31,21 +31,21 @@ import (
 	"bytes"
 	"encoding/json"
 	"github.com/btcsuite/btcutil/base58"
-	"github.com/palletone/go-palletone/common/hexutil"
 )
 
 const (
 	AddressLength = 21 //byte[0:20] is hash160, byte[20] is AddressType
 )
 
-var (
-	addressT = reflect.TypeOf(Address{})
-)
+//var (
+//	addressT = reflect.TypeOf(Address{})
+//)
 
 /////////// Address
 
 // Address represents the 35 byte address of an PalletOne account.
-// for personal address, start with P1 (version 0), script address start with P3(version 5), contract address start with Pc(version 28)
+// for personal address, start with P1 (version 0), script address start with P3(version 5),
+// contract address start with Pc(version 28)
 type Addresses []Address
 type Address [AddressLength]byte
 type AddressType byte
@@ -63,10 +63,13 @@ func (a *Address) GetType() AddressType {
 
 //如果是合约地址，那么是不是一个系统合约地址？
 func (a *Address) IsSystemContractAddress() bool {
+	return IsSystemContractAddress(a.Bytes())
+}
+func IsSystemContractAddress(addr []byte) bool {
 	bb := make([]byte, 20)
 	bb[18] = 0xff
 	bb[19] = 0xff
-	return bytes.Compare(a.Bytes(), bb) < 0
+	return bytes.Compare(addr, bb) < 0
 }
 func NewAddress(hash160 []byte, ty AddressType) Address {
 	newBytes := make([]byte, 21)
@@ -83,7 +86,7 @@ func StringToAddress(a string) (Address, error) {
 	if a[0] != byte('P') {
 		return Address{}, errors.New("PalletOne address must start with 'P'")
 	}
-	addrb, version, err := base58.CheckDecode(string(a[1:]))
+	addrb, version, err := base58.CheckDecode(a[1:])
 	if err != nil {
 		return Address{}, err
 	}
@@ -127,7 +130,7 @@ func BytesListToAddressList(b []byte) []Address {
 
 	var stringArray []string
 	json.Unmarshal(b, &stringArray)
-	var Addresses []Address
+	Addresses := make([]Address, 0, len(stringArray))
 
 	for _, str := range stringArray {
 		addr, _ := StringToAddress(str)
@@ -136,7 +139,22 @@ func BytesListToAddressList(b []byte) []Address {
 	return Addresses
 }
 
-func HexToAddress(s string) Address { return BytesToAddress(FromHex(s)) }
+func (a Addresses) Len() int {
+	return len(a)
+}
+
+func (a Addresses) Less(i, j int) bool {
+	return a[i].Less(a[j])
+}
+
+func (a Addresses) Swap(i, j int) {
+	a[i], a[j] = a[j], a[i]
+}
+
+func HexToAddress(s string) Address {
+	return BytesToAddress(FromHex(s))
+}
+
 func PubKeyHashHexToAddress(s string) Address {
 	pubKeyHash := FromHex(s)
 	addrStr := "P" + base58.CheckEncode(pubKeyHash, byte(0))
@@ -154,7 +172,7 @@ func IsHexAddress(s string) bool {
 
 // Get the string representation of the underlying address
 func (a Address) Str() string {
-	return "P" + base58.CheckEncode(a[0:20], byte(a[20]))
+	return "P" + base58.CheckEncode(a[0:20], a[20])
 }
 
 //Return account 20 bytes without address type
@@ -191,7 +209,14 @@ func (a *Address) SetBytes(b []byte) {
 }
 
 // Set string `s` to a. If s is larger than len(a) it will panic
-func (a *Address) SetString(s string) { a.SetBytes([]byte(s)) }
+func (a *Address) SetString(s string) error {
+	b, err := StringToAddress(s)
+	if err != nil {
+		return err
+	}
+	a.Set(b)
+	return nil
+}
 
 // Sets a to other
 func (a *Address) Set(other Address) {
@@ -202,17 +227,23 @@ func (a *Address) Set(other Address) {
 
 // MarshalText returns the hex representation of a.
 func (a Address) MarshalText() ([]byte, error) {
-	return hexutil.Bytes(a[:]).MarshalText()
+	return []byte(a.String()), nil
 }
 
 // UnmarshalText parses a hash in hex syntax.
 func (a *Address) UnmarshalText(input []byte) error {
-	return hexutil.UnmarshalFixedText("Address", input, a[:])
+	return a.SetString(string(input))
 }
 
 // UnmarshalJSON parses a hash in hex syntax.
 func (a *Address) UnmarshalJSON(input []byte) error {
-	return hexutil.UnmarshalFixedJSON(addressT, input, a[:])
+	addrStr := string(input[1 : len(input)-1])
+	return a.SetString(addrStr)
+}
+
+func (a *Address) MarshalJSON() ([]byte, error) {
+	str := a.String()
+	return json.Marshal(str)
 }
 
 //YiRan
@@ -220,6 +251,14 @@ func (a *Address) UnmarshalJSON(input []byte) error {
 func (a *Address) Equal(b Address) bool {
 	for i, v := range a {
 		if v != b[i] {
+			return false
+		}
+	}
+	return true
+}
+func (a *Address) IsZero() bool {
+	for _, v := range a {
+		if v != byte(0) {
 			return false
 		}
 	}

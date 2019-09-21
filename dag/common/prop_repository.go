@@ -11,6 +11,7 @@
 	You should have received a copy of the GNU General Public License
 	along with go-palletone.  If not, see <http://www.gnu.org/licenses/>.
 */
+
 /*
  * @author PalletOne core developer Albert·Gou <dev@pallet.one>
  * @date 2018
@@ -20,18 +21,23 @@
 package common
 
 import (
+	"encoding/binary"
+	"time"
+
 	"github.com/palletone/go-palletone/common"
 	"github.com/palletone/go-palletone/common/log"
 	"github.com/palletone/go-palletone/common/ptndb"
+	"github.com/palletone/go-palletone/contracts/list"
+	"github.com/palletone/go-palletone/core"
 	"github.com/palletone/go-palletone/dag/dagconfig"
 	"github.com/palletone/go-palletone/dag/modules"
 	"github.com/palletone/go-palletone/dag/storage"
-	"time"
 )
 
 type PropRepository struct {
 	db storage.IPropertyDb
 }
+
 type IPropRepository interface {
 	StoreGlobalProp(gp *modules.GlobalProperty) error
 	RetrieveGlobalProp() (*modules.GlobalProperty, error)
@@ -40,17 +46,37 @@ type IPropRepository interface {
 	StoreMediatorSchl(ms *modules.MediatorSchedule) error
 	RetrieveMediatorSchl() (*modules.MediatorSchedule, error)
 	GetChainThreshold() (int, error)
-	SetLastStableUnit(hash common.Hash, index *modules.ChainIndex) error
-	GetLastStableUnit(token modules.AssetId) (common.Hash, *modules.ChainIndex, error)
+	// SetLastStableUnit(hash common.Hash, index *modules.ChainIndex) error
+	// GetLastStableUnit(token modules.AssetId) (common.Hash, *modules.ChainIndex, error)
 	SetNewestUnit(header *modules.Header) error
 	GetNewestUnit(token modules.AssetId) (common.Hash, *modules.ChainIndex, error)
 	GetNewestUnitTimestamp(token modules.AssetId) (int64, error)
 	GetScheduledMediator(slotNum uint32) common.Address
-	UpdateMediatorSchedule(ms *modules.MediatorSchedule, gp *modules.GlobalProperty, dgp *modules.DynamicGlobalProperty) bool
-	GetSlotTime(gp *modules.GlobalProperty, dgp *modules.DynamicGlobalProperty, slotNum uint32) time.Time
-	GetSlotAtTime(gp *modules.GlobalProperty, dgp *modules.DynamicGlobalProperty, when time.Time) uint32
+	UpdateMediatorSchedule() bool
+	GetSlotTime(slotNum uint32) time.Time
+	GetSlotAtTime(when time.Time) uint32
+
+	SaveChaincode(contractId common.Address, cc *list.CCInfo) error
+	GetChaincode(contractId common.Address) (*list.CCInfo, error)
+	RetrieveChaincodes() ([]*list.CCInfo, error)
+	GetChainParameters() *core.ChainParameters
 }
 
+func (pRep *PropRepository) GetChainParameters() *core.ChainParameters {
+	return pRep.db.GetChainParameters()
+}
+
+func (pRep *PropRepository) GetChaincode(contractId common.Address) (*list.CCInfo, error) {
+	return pRep.db.GetChaincode(contractId)
+}
+
+func (pRep *PropRepository) SaveChaincode(contractId common.Address, cc *list.CCInfo) error {
+	return pRep.db.SaveChaincode(contractId, cc)
+}
+
+func (pRep *PropRepository) RetrieveChaincodes() ([]*list.CCInfo, error) {
+	return pRep.db.RetrieveChaincodes()
+}
 func NewPropRepository(db storage.IPropertyDb) *PropRepository {
 	return &PropRepository{db: db}
 }
@@ -68,52 +94,71 @@ func (pRep *PropRepository) GetChainThreshold() (int, error) {
 	}
 	return gp.ChainThreshold(), nil
 }
+
 func (pRep *PropRepository) RetrieveDynGlobalProp() (*modules.DynamicGlobalProperty, error) {
 	return pRep.db.RetrieveDynGlobalProp()
 }
+
 func (pRep *PropRepository) StoreGlobalProp(gp *modules.GlobalProperty) error {
 	return pRep.db.StoreGlobalProp(gp)
 }
+
 func (pRep *PropRepository) StoreDynGlobalProp(dgp *modules.DynamicGlobalProperty) error {
 	return pRep.db.StoreDynGlobalProp(dgp)
 }
+
 func (pRep *PropRepository) StoreMediatorSchl(ms *modules.MediatorSchedule) error {
 	return pRep.db.StoreMediatorSchl(ms)
 }
+
 func (pRep *PropRepository) RetrieveMediatorSchl() (*modules.MediatorSchedule, error) {
 	return pRep.db.RetrieveMediatorSchl()
 }
-func (pRep *PropRepository) SetLastStableUnit(hash common.Hash, index *modules.ChainIndex) error {
-	return pRep.db.SetLastStableUnit(hash, index)
-}
-func (pRep *PropRepository) GetLastStableUnit(token modules.AssetId) (common.Hash, *modules.ChainIndex, error) {
-	return pRep.db.GetLastStableUnit(token)
-}
+
+// func (pRep *PropRepository) SetLastStableUnit(hash common.Hash, index *modules.ChainIndex) error {
+// 	return pRep.db.SetLastStableUnit(hash, index)
+// }
+// func (pRep *PropRepository) GetLastStableUnit(token modules.AssetId) (common.Hash, *modules.ChainIndex, error) {
+// 	return pRep.db.GetLastStableUnit(token)
+// }
+
 func (pRep *PropRepository) SetNewestUnit(header *modules.Header) error {
 	return pRep.db.SetNewestUnit(header)
 }
+
 func (pRep *PropRepository) GetNewestUnit(token modules.AssetId) (common.Hash, *modules.ChainIndex, error) {
 	hash, index, _, e := pRep.db.GetNewestUnit(token)
 	return hash, index, e
 }
+
 func (pRep *PropRepository) GetNewestUnitTimestamp(token modules.AssetId) (int64, error) {
 	_, _, t, e := pRep.db.GetNewestUnit(token)
 	return t, e
 }
 
 // 洗牌算法，更新mediator的调度顺序
-func (pRep *PropRepository) UpdateMediatorSchedule(ms *modules.MediatorSchedule, gp *modules.GlobalProperty,
-	dgp *modules.DynamicGlobalProperty) bool {
-	token := dagconfig.DagConfig.GetGasToken()
-	_, idx, timestamp, err := pRep.db.GetNewestUnit(token)
+func (pRep *PropRepository) UpdateMediatorSchedule() bool {
+	gp, err := pRep.RetrieveGlobalProp()
 	if err != nil {
-		log.Debug("GetNewestUnit error:" + err.Error())
+		log.Debugf("Retrieve Global Prop error: %v", err.Error())
+		return false
+	}
+	ms, err := pRep.RetrieveMediatorSchl()
+	if err != nil {
+		log.Debugf("Retrieve MediatorSchl error: %v", err.Error())
+		return false
+	}
+
+	token := dagconfig.DagConfig.GetGasToken()
+	hash, idx, _, err := pRep.db.GetNewestUnit(token)
+	if err != nil {
+		log.Debugf("GetNewestUnit error:" + err.Error())
 		return false
 	}
 
 	aSize := uint64(len(gp.ActiveMediators))
 	if aSize == 0 {
-		log.Debug("The current number of active mediators is 0!")
+		log.Debugf("the current number of active mediators is 0")
 		return false
 	}
 
@@ -123,17 +168,31 @@ func (pRep *PropRepository) UpdateMediatorSchedule(ms *modules.MediatorSchedule,
 	}
 
 	// 2. 清除CurrentShuffledMediators原来的空间，重新分配空间
-	ms.CurrentShuffledMediators = make([]common.Address, aSize, aSize)
+	ms.CurrentShuffledMediators = make([]common.Address, aSize)
 
 	// 3. 初始化数据
 	meds := gp.GetActiveMediators()
-	for i, add := range meds {
-		ms.CurrentShuffledMediators[i] = add
-	}
+	copy(ms.CurrentShuffledMediators, meds)
+	//for i, add := range meds {
+	//	ms.CurrentShuffledMediators[i] = add
+	//}
 
 	// 4. 打乱证人的调度顺序
-	nowHi := uint64(timestamp << 32)
-	for i := uint64(0); i < aSize; i++ {
+	shuffleMediators(ms.CurrentShuffledMediators, binary.BigEndian.Uint64(hash[8:]))
+
+	err = pRep.StoreMediatorSchl(ms)
+	if err != nil {
+		log.Debugf("StoreMediatorSchl error:" + err.Error())
+		return false
+	}
+
+	return true
+}
+
+func shuffleMediators(mediators []common.Address, seed uint64) {
+	nowHi := seed << 32
+	aSize := len(mediators)
+	for i := 0; i < aSize; i++ {
 		// 高性能随机生成器(High performance random generator)
 		// 原理请参考 http://xorshift.di.unimi.it/
 		k := nowHi + uint64(i)*2685821657736338717
@@ -142,15 +201,12 @@ func (pRep *PropRepository) UpdateMediatorSchedule(ms *modules.MediatorSchedule,
 		k ^= k >> 27
 		k *= 2685821657736338717
 
-		jmax := aSize - i
-		j := i + k%jmax
+		jmax := uint64(aSize - i)
+		j := uint64(i) + k%jmax
 
 		// 进行N次随机交换
-		ms.CurrentShuffledMediators[i], ms.CurrentShuffledMediators[j] =
-			ms.CurrentShuffledMediators[j], ms.CurrentShuffledMediators[i]
+		mediators[i], mediators[j] = mediators[j], mediators[i]
 	}
-
-	return true
 }
 
 /**
@@ -163,8 +219,19 @@ If slotNum == 0, return time.Unix(0,0).
 如果slotNum == N 且 N > 0，则返回大于UnitTime的第N个单元验证间隔的对齐时间
 If slotNum == N for N > 0, return the Nth next unit-interval-aligned time greater than head_block_time().
 */
-func (pRep *PropRepository) GetSlotTime(gp *modules.GlobalProperty, dgp *modules.DynamicGlobalProperty, slotNum uint32) time.Time {
+func (pRep *PropRepository) GetSlotTime(slotNum uint32) time.Time {
 	if slotNum == 0 {
+		return time.Unix(0, 0)
+	}
+
+	gp, err := pRep.RetrieveGlobalProp()
+	if err != nil {
+		log.Debugf("Retrieve Global Prop error: %v", err.Error())
+		return time.Unix(0, 0)
+	}
+	dgp, err := pRep.RetrieveDynGlobalProp()
+	if err != nil {
+		log.Debugf("Retrieve Dyn Global Prop error: %v", err.Error())
 		return time.Unix(0, 0)
 	}
 
@@ -184,31 +251,44 @@ func (pRep *PropRepository) GetSlotTime(gp *modules.GlobalProperty, dgp *modules
 	// 最近的unit的绝对slot
 	var unitAbsSlot = ts / int64(interval)
 	// 最近的时间槽起始时间
-	unitSlotTime := time.Unix(unitAbsSlot*int64(interval), 0)
+	headSlotTime := time.Unix(unitAbsSlot*int64(interval), 0)
 
-	// 在此处添加区块链网络参数修改维护的所需要的slot
+	// 添加区块链网络参数修改维护时所需跳过的slot
+	if dgp.MaintenanceFlag {
+		slotNum += uint32(gp.ChainParameters.MaintenanceSkipSlots)
+	}
 
-	/**
-	如果是维护周期的话，加上维护间隔时间
-	如果不是，就直接加上unit的slot时间
-	*/
-	// "slot 1" is UnitSlotTime,
-	// plus maintenance interval if last uint is a maintenance Unit
-	// plus Unit interval if last uint is not a maintenance Unit
-	return unitSlotTime.Add(time.Second * time.Duration(slotNum) * time.Duration(interval))
+	// 如果是维护周期的话，加上维护间隔时间
+	// 如果不是，就直接加上unit的slot时间
+	// "slot 0" is headSlotTime
+	// "slot 1" is headSlotTime,
+	// plus maintenance interval if head uint is a maintenance Unit
+	// plus Unit interval if head uint is not a maintenance Unit
+	return headSlotTime.Add(time.Second * time.Duration(slotNum) * time.Duration(interval))
 }
 
 /**
 获取在给定时间或之前出现的最近一个slot。 Get the last slot which occurs AT or BEFORE the given time.
 */
-func (pRep *PropRepository) GetSlotAtTime(gp *modules.GlobalProperty, dgp *modules.DynamicGlobalProperty, when time.Time) uint32 {
+func (pRep *PropRepository) GetSlotAtTime(when time.Time) uint32 {
+	gp, err := pRep.RetrieveGlobalProp()
+	if err != nil {
+		log.Debugf("Retrieve Global Prop error: %v", err.Error())
+		return 0
+	}
+	//dgp, err := pRep.RetrieveDynGlobalProp()
+	//if err != nil {
+	//	log.Debugf("Retrieve Dyn Global Prop error: %v", err.Error())
+	//	return 0
+	//}
+
 	/**
 	返回值是所有满足 GetSlotTime（N）<= when 中最大的N
 	The return value is the greatest value N such that GetSlotTime( N ) <= when.
 	如果都不满足，则返回 0
 	If no such N exists, return 0.
 	*/
-	firstSlotTime := pRep.GetSlotTime(gp, dgp, 1)
+	firstSlotTime := pRep.GetSlotTime(1)
 
 	if when.Before(firstSlotTime) {
 		return 0

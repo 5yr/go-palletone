@@ -78,7 +78,7 @@ func Select_utxo_Greedy(utxos Utxos, amount uint64) (Utxos, uint64, error) {
 	}
 	if len(lessers) > 0 {
 
-		sort.Sort(Utxos(lessers))
+		sort.Sort(lessers)
 		for _, utxo := range lessers {
 			accum += utxo.GetAmount()
 			logPickedAmt += fmt.Sprintf("%d,", utxo.GetAmount())
@@ -88,13 +88,13 @@ func Select_utxo_Greedy(utxos Utxos, amount uint64) (Utxos, uint64, error) {
 				log.Debugf("Pickup count[%d] utxos, each amount:%s to match wanted amount:%d", len(taken_lutxo), logPickedAmt, amount)
 				return taken_lutxo, change, nil
 			}
-			}
 		}
-    if accum < amount && len(greaters) == 0{
-			return nil, 0, errors.New("Amount Not Enough to pay")
-		}
-	var min_greater UtxoInterface
-	min_greater = find_min(greaters)
+	}
+	if accum < amount && len(greaters) == 0 {
+		return nil, 0, errors.New("Amount Not Enough to pay")
+	}
+
+	min_greater := find_min(greaters)
 	change = min_greater.GetAmount() - amount
 	logPickedAmt = fmt.Sprintf("%d,", min_greater.GetAmount())
 	taken_gutxo = append(taken_gutxo, min_greater)

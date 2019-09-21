@@ -23,11 +23,14 @@ import (
 	"fmt"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/palletone/go-palletone/common"
+	"github.com/palletone/go-palletone/common/log"
 	"io"
 )
 
 type transactionTemp struct {
 	TxMessages []messageTemp
+	CertId     []byte `json:"cert_id"` // should be big.Int byte
+	Illegal    bool   `json:"Illegal"` // not hash, 1:no valid, 0:ok
 }
 type messageTemp struct {
 	App  MessageType
@@ -55,6 +58,8 @@ func (tx *Transaction) EncodeRLP(w io.Writer) error {
 }
 func tx2Temp(tx *Transaction) (*transactionTemp, error) {
 	temp := &transactionTemp{}
+	temp.Illegal = tx.Illegal
+	temp.CertId = tx.CertId
 
 	for _, m := range tx.TxMessages {
 		m1 := messageTemp{
@@ -85,39 +90,81 @@ func temp2Tx(temp *transactionTemp, tx *Transaction) error {
 			m1.Payload = &pay
 		} else if m.App == APP_DATA {
 			var text DataPayload
-			rlp.DecodeBytes(m.Data, &text)
+			err := rlp.DecodeBytes(m.Data, &text)
+			if err != nil {
+				return err
+			}
 			m1.Payload = &text
 		} else if m.App == APP_CONTRACT_TPL_REQUEST {
 			var payload ContractInstallRequestPayload
-			rlp.DecodeBytes(m.Data, &payload)
+			err := rlp.DecodeBytes(m.Data, &payload)
+			if err != nil {
+				return err
+			}
 			m1.Payload = &payload
 		} else if m.App == APP_CONTRACT_TPL {
 			var payload ContractTplPayload
-			rlp.DecodeBytes(m.Data, &payload)
+			err := rlp.DecodeBytes(m.Data, &payload)
+			if err != nil {
+				return err
+			}
 			m1.Payload = &payload
 		} else if m.App == APP_CONTRACT_DEPLOY_REQUEST {
 			var payload ContractDeployRequestPayload
-			rlp.DecodeBytes(m.Data, &payload)
+			err := rlp.DecodeBytes(m.Data, &payload)
+			if err != nil {
+				return err
+			}
 			m1.Payload = &payload
 		} else if m.App == APP_CONTRACT_DEPLOY {
 			var payload ContractDeployPayload
-			rlp.DecodeBytes(m.Data, &payload)
+			log.Debugf("ContractDeployPayload hex:%x", m.Data)
+			err := rlp.DecodeBytes(m.Data, &payload)
+			if err != nil {
+				log.Debugf("data [%x] cannot decode to newest ContractDeployPayload, try decode to ContractDeployPayloadV1", m.Data)
+				temp := &ContractDeployPayloadV1{}
+				err = rlp.DecodeBytes(m.Data, temp)
+				if err != nil {
+					return err
+				}
+
+				payload.TemplateId = temp.TemplateId
+				payload.ContractId = temp.ContractId
+				payload.Name = temp.Name
+				payload.Args = temp.Args
+				payload.EleNode.EleList = temp.EleList
+				payload.ReadSet = temp.ReadSet
+				payload.WriteSet = temp.WriteSet
+				payload.ErrMsg = temp.ErrMsg
+			}
 			m1.Payload = &payload
 		} else if m.App == APP_CONTRACT_INVOKE_REQUEST {
 			var payload ContractInvokeRequestPayload
-			rlp.DecodeBytes(m.Data, &payload)
+			err := rlp.DecodeBytes(m.Data, &payload)
+			if err != nil {
+				return err
+			}
 			m1.Payload = &payload
 		} else if m.App == APP_CONTRACT_INVOKE {
 			var payload ContractInvokePayload
-			rlp.DecodeBytes(m.Data, &payload)
+			err := rlp.DecodeBytes(m.Data, &payload)
+			if err != nil {
+				return err
+			}
 			m1.Payload = &payload
 		} else if m.App == APP_CONTRACT_STOP_REQUEST {
 			var payload ContractStopRequestPayload
-			rlp.DecodeBytes(m.Data, &payload)
+			err := rlp.DecodeBytes(m.Data, &payload)
+			if err != nil {
+				return err
+			}
 			m1.Payload = &payload
 		} else if m.App == APP_CONTRACT_STOP {
 			var payload ContractStopPayload
-			rlp.DecodeBytes(m.Data, &payload)
+			err := rlp.DecodeBytes(m.Data, &payload)
+			if err != nil {
+				return err
+			}
 			m1.Payload = &payload
 			//} else if m.App == APP_CONFIG {
 			//	var conf ConfigPayload
@@ -125,15 +172,17 @@ func temp2Tx(temp *transactionTemp, tx *Transaction) error {
 			//	m1.Payload = &conf
 		} else if m.App == APP_SIGNATURE {
 			var sigPayload SignaturePayload
-			rlp.DecodeBytes(m.Data, &sigPayload)
+			err := rlp.DecodeBytes(m.Data, &sigPayload)
+			if err != nil {
+				return err
+			}
 			m1.Payload = &sigPayload
-		} else if m.App == OP_MEDIATOR_CREATE {
-			var mediatorCreateOp MediatorCreateOperation
-			rlp.DecodeBytes(m.Data, &mediatorCreateOp)
-			m1.Payload = &mediatorCreateOp
-		} else if m.App == OP_ACCOUNT_UPDATE {
-			var accountUpdateOp AccountUpdateOperation
-			rlp.DecodeBytes(m.Data, &accountUpdateOp)
+		} else if m.App == APP_ACCOUNT_UPDATE {
+			var accountUpdateOp AccountStateUpdatePayload
+			err := rlp.DecodeBytes(m.Data, &accountUpdateOp)
+			if err != nil {
+				return err
+			}
 			m1.Payload = &accountUpdateOp
 		} else {
 			fmt.Println("Unknown message app type:", m.App)
@@ -141,6 +190,8 @@ func temp2Tx(temp *transactionTemp, tx *Transaction) error {
 		tx.TxMessages = append(tx.TxMessages, m1)
 
 	}
+	tx.Illegal = temp.Illegal
+	tx.CertId = temp.CertId
 	return nil
 
 }

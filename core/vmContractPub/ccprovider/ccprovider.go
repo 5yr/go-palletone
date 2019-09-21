@@ -11,10 +11,11 @@
 	You should have received a copy of the GNU General Public License
 	along with go-palletone.  If not, see <http://www.gnu.org/licenses/>.
 */
+
 /*
- * Copyright IBM Corp. All Rights Reserved.
- * @author PalletOne core developers <dev@pallet.one>
- * @date 2018
+* Copyright IBM Corp. All Rights Reserved.
+* @author PalletOne core developers <dev@pallet.one>
+* @date 2018
  */
 
 package ccprovider
@@ -31,7 +32,6 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/palletone/go-palletone/common/log"
 	pb "github.com/palletone/go-palletone/core/vmContractPub/protos/peer"
-	"github.com/pkg/errors"
 	"time"
 )
 
@@ -76,36 +76,36 @@ type CCPackage interface {
 }
 
 //SetChaincodesPath sets the chaincode path for this peer
-func SetChaincodesPath(path string) error {
-	if s, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
-			if err := os.MkdirAll(path, 0755); err != nil {
-				log.Errorf("Could not create chaincodes install path: %s", err)
-				return err
-			}
-		} else {
-			log.Errorf("Could not stat chaincodes install path: %s", err)
-		}
-	} else if !s.IsDir() {
-		log.Errorf("chaincode path exists but not a dir: %s", path)
-		return errors.New("chaincodes path is not dir")
-	}
-
-	chaincodeInstallPath = path
-	return nil
-}
+//func SetChaincodesPath(path string) error {
+//	if s, err := os.Stat(path); err != nil {
+//		if os.IsNotExist(err) {
+//			if err := os.MkdirAll(path, 0750); err != nil {
+//				log.Errorf("Could not create chaincodes install path: %s", err)
+//				return err
+//			}
+//		} else {
+//			log.Errorf("Could not stat chaincodes install path: %s", err)
+//		}
+//	} else if !s.IsDir() {
+//		log.Errorf("chaincode path exists but not a dir: %s", path)
+//		return errors.New("chaincodes path is not dir")
+//	}
+//
+//	chaincodeInstallPath = path
+//	return nil
+//}
 
 //GetChaincodePackage returns the chaincode package from the file system
-func GetChaincodePackage(ccname string, ccversion string) ([]byte, error) {
-	path := fmt.Sprintf("%s/%s.%s", chaincodeInstallPath, ccname, ccversion)
-	log.Infof("path:%s", path)
-	var ccbytes []byte
-	var err error
-	if ccbytes, err = ioutil.ReadFile(path); err != nil {
-		return nil, err
-	}
-	return ccbytes, nil
-}
+//func GetChaincodePackage(ccname string, ccversion string) ([]byte, error) {
+//	path := fmt.Sprintf("%s/%s.%s", chaincodeInstallPath, ccname, ccversion)
+//	log.Infof("path:%s", path)
+//	var ccbytes []byte
+//	var err error
+//	if ccbytes, err = ioutil.ReadFile(path); err != nil {
+//		return nil, err
+//	}
+//	return ccbytes, nil
+//}
 
 //ChaincodePackageExists returns whether the chaincode package exists in the file system
 func ChaincodePackageExists(ccname string, ccversion string) (bool, error) {
@@ -130,42 +130,43 @@ type CCInfoFSImpl struct{}
 // GetChaincodeFromFS this is a wrapper for hiding package implementation.
 func (*CCInfoFSImpl) GetChaincode(ccname string, ccversion string) (CCPackage, error) {
 	//try raw CDS
-	cccdspack := &CDSPackage{}
-	_, _, err := cccdspack.InitFromFS(ccname, ccversion)
-
-	//glh
-	/*
-		if err != nil {
-			//try signed CDS
-			ccscdspack := &SignedCDSPackage{}
-			_, _, err = ccscdspack.InitFromFS(ccname, ccversion)
-			if err != nil {
-				return nil, err
-			}
-			return ccscdspack, nil
-		}
-	*/
-	return cccdspack, err
+	//cccdspack := &CDSPackage{}
+	//_, _, err := cccdspack.InitFromFS(ccname, ccversion)
+	//
+	////glh
+	///*
+	//	if err != nil {
+	//		//try signed CDS
+	//		ccscdspack := &SignedCDSPackage{}
+	//		_, _, err = ccscdspack.InitFromFS(ccname, ccversion)
+	//		if err != nil {
+	//			return nil, err
+	//		}
+	//		return ccscdspack, nil
+	//	}
+	//*/
+	//return cccdspack, err
+	return nil, nil
 }
 
 // PutChaincodeIntoFS is a wrapper for putting raw ChaincodeDeploymentSpec
 //using CDSPackage. This is only used in UTs
-func (*CCInfoFSImpl) PutChaincode(depSpec *pb.ChaincodeDeploymentSpec) (CCPackage, error) {
-	buf, err := proto.Marshal(depSpec)
-	if err != nil {
-		return nil, err
-	}
-	cccdspack := &CDSPackage{}
-	if _, err := cccdspack.InitFromBuffer(buf); err != nil {
-		return nil, err
-	}
-	err = cccdspack.PutChaincodeToFS()
-	if err != nil {
-		return nil, err
-	}
-
-	return cccdspack, nil
-}
+//func (*CCInfoFSImpl) PutChaincode(depSpec *pb.ChaincodeDeploymentSpec) (CCPackage, error) {
+//	buf, err := proto.Marshal(depSpec)
+//	if err != nil {
+//		return nil, err
+//	}
+//	cccdspack := &CDSPackage{}
+//	if _, err := cccdspack.InitFromBuffer(buf); err != nil {
+//		return nil, err
+//	}
+//	err = cccdspack.PutChaincodeToFS()
+//	if err != nil {
+//		return nil, err
+//	}
+//
+//	return cccdspack, nil
+//}
 
 // The following lines create the cache of CCPackage data that sits
 // on top of the file system and avoids a trip to the file system
@@ -205,10 +206,10 @@ func GetChaincodeFromFS(ccname string, ccversion string) (CCPackage, error) {
 // PutChaincodeIntoFS puts chaincode information in the file system (and
 // also in the cache to prime it) if the cache is enabled, or directly
 // from the file system otherwise
-func PutChaincodeIntoFS(depSpec *pb.ChaincodeDeploymentSpec) error {
-	_, err := ccInfoFSProvider.PutChaincode(depSpec)
-	return err
-}
+//func PutChaincodeIntoFS(depSpec *pb.ChaincodeDeploymentSpec) error {
+//	_, err := ccInfoFSProvider.PutChaincode(depSpec)
+//	return err
+//}
 
 // GetChaincodeData gets chaincode data from cache if there's one
 func GetChaincodeData(ccname string, ccversion string) (*ChaincodeData, error) {
@@ -254,10 +255,10 @@ func CheckInstantiationPolicy(name, version string, cdLedger *ChaincodeData) err
 // till the right package is found
 func GetCCPackage(buf []byte) (CCPackage, error) {
 	//try raw CDS
-	cccdspack := &CDSPackage{}
-	_, err := cccdspack.InitFromBuffer(buf)
-	return cccdspack, err
-
+	//cccdspack := &CDSPackage{}
+	//_, err := cccdspack.InitFromBuffer(buf)
+	//return cccdspack, err
+	return nil, nil
 	//glh
 	/*
 		if _, err := cccdspack.InitFromBuffer(buf); err != nil {
@@ -377,7 +378,6 @@ func NewCCContext(contractid []byte, cid, name, version, txid string, syscc bool
 	}
 
 	canName := name + ":" + version
-
 	cccid := &CCContext{contractid, cid, name, version, txid, syscc, signedProp, prop, canName, nil}
 
 	log.Debugf("NewCCCC (chain[%s],chaincode[%s],version[%s],txid[%s],syscc[%t],proposal[%p],canname[%s])", cid, name, version, txid, syscc, prop, cccid.canonicalName)
@@ -392,6 +392,11 @@ func (cccid *CCContext) GetCanonicalName() string {
 	}
 
 	return cccid.canonicalName
+}
+
+func (cccid *CCContext) GetContainerName() string {
+	name := cccid.Name + ":" + cccid.Version
+	return strings.Replace(name, ":", "-", -1)
 }
 
 //-------- ChaincodeData is stored on the LSCC -------
@@ -475,7 +480,7 @@ func (*ChaincodeData) ProtoMessage() {}
 // should be added below if necessary
 type ChaincodeProvider interface {
 	// GetContext returns a ledger context and a tx simulator; it's the
-	// caller's responsability to release the simulator by calling its
+	// caller's responsibility to release the simulator by calling its
 	// done method once it is no longer useful
 	//glh
 	//GetContext(ledger ledger.PeerLedger, txid string) (context.Context, ledger.TxSimulator, error)
@@ -489,9 +494,9 @@ type ChaincodeProvider interface {
 	// ExecuteWithErrorFilter executes the chaincode given context and spec and returns payload
 	ExecuteWithErrorFilter(ctxt context.Context, cccid interface{}, spec interface{}, timeout time.Duration) ([]byte, *pb.ChaincodeEvent, error)
 	// Stop stops the chaincode given context and deployment spec
-	Stop(ctxt context.Context, cccid interface{}, spec *pb.ChaincodeDeploymentSpec) error
+	Stop(ctxt context.Context, cccid interface{}, spec *pb.ChaincodeDeploymentSpec, dontRmCon bool) error
 
-	Destory(ctxt context.Context, cccid interface{}, spec *pb.ChaincodeDeploymentSpec) error
+	Destroy(ctxt context.Context, cccid interface{}, spec *pb.ChaincodeDeploymentSpec) error
 }
 
 var ccFactory ChaincodeProviderFactory

@@ -68,11 +68,11 @@ func (b *bridge) NewAccount(call otto.FunctionCall) (response otto.Value) {
 			throwJSException("passphrases don't match!")
 		}
 
-	// A single string password was specified, use that
+		// A single string password was specified, use that
 	case len(call.ArgumentList) == 1 && call.Argument(0).IsString():
 		password, _ = call.Argument(0).ToString()
 
-	// Otherwise fail with some error
+		// Otherwise fail with some error
 	default:
 		throwJSException("expected 0 or 1 string argument")
 	}
@@ -167,6 +167,24 @@ func (b *bridge) UnlockAccount(call otto.FunctionCall) (response otto.Value) {
 	return val
 }
 
+func (b *bridge) GetUnitsByIndex(call otto.FunctionCall) (response otto.Value) {
+	if !call.Argument(0).IsNumber() || !call.Argument(1).IsNumber() {
+		throwJSException("the argument must be number.")
+	}
+	if !call.Argument(2).IsString() {
+		throwJSException("the argument must be string.")
+	}
+	start := call.Argument(0)
+	end := call.Argument(1)
+	asset := call.Argument(2)
+	val, err := call.Otto.Call("jptn.getUnitsByIndex", nil, start, end, asset)
+	if err != nil {
+		throwJSException("jay++++" + err.Error())
+	}
+	// Send the request to the backend and return
+	return val
+}
+
 //add by wzhyuan
 func (b *bridge) SignRawTransaction(call otto.FunctionCall) (response otto.Value) {
 	// Make sure we have an account specified to unlock
@@ -175,11 +193,11 @@ func (b *bridge) SignRawTransaction(call otto.FunctionCall) (response otto.Value
 	}
 	rawtx := call.Argument(0)
 
-    if !call.Argument(1).IsString() {
+	if !call.Argument(1).IsString() {
 		throwJSException("second argument must be the hashtype ")
 	}
 	hashtype := call.Argument(1)
-   
+
 	// If password is not given or is the null value, prompt the user for it
 	var passwd otto.Value
 
@@ -205,7 +223,7 @@ func (b *bridge) SignRawTransaction(call otto.FunctionCall) (response otto.Value
 		duration = call.Argument(3)
 	}
 	// Send the request to the backend and return
-	val, err := call.Otto.Call("jptn.signRawTransaction", nil, rawtx,hashtype,passwd, duration)
+	val, err := call.Otto.Call("jptn.signRawTransaction", nil, rawtx, hashtype, passwd, duration)
 	if err != nil {
 		throwJSException(err.Error())
 	}
@@ -315,6 +333,90 @@ func (b *bridge) TransferToken(call otto.FunctionCall) (response otto.Value) {
 	return val
 }
 
+func (b *bridge) TransferGasToken(call otto.FunctionCall) (response otto.Value) {
+	// Make sure we have an account specified to unlock
+
+	if !call.Argument(0).IsString() {
+		throwJSException("sencond argument must be account address string to unlock")
+	}
+	if !call.Argument(1).IsString() {
+		throwJSException("third argument must be account address string to receive token")
+	}
+	// asset := call.Argument(0)
+	from := call.Argument(0)
+	to := call.Argument(1)
+
+	//3 index, amount
+	//4 index, fee
+	amount := call.Argument(2)
+	fee := call.Argument(3)
+	extra := call.Argument(4)
+
+	// If password is not given or is the null value, prompt the user for it
+	var passwd otto.Value
+	if call.Argument(5).IsUndefined() || call.Argument(5).IsNull() {
+		if input, err := b.prompter.PromptPassword("Passphrase: "); err != nil {
+			throwJSException(err.Error())
+		} else {
+			passwd, _ = otto.ToValue(input)
+		}
+	} else {
+		if !call.Argument(5).IsString() {
+			throwJSException("password must be a string")
+		}
+		passwd = call.Argument(5)
+	}
+	// Third argument is the duration how long the account must be unlocked.
+	duration := otto.NullValue()
+	if call.Argument(6).IsDefined() && !call.Argument(6).IsNull() {
+		if !call.Argument(6).IsNumber() {
+			throwJSException("unlock duration must be a number")
+		}
+		duration = call.Argument(6)
+	}
+	// Send the request to the backend and return
+	val, err := call.Otto.Call("jptn.transferPTN", nil, from, to, amount, fee, extra, passwd, duration)
+	if err != nil {
+		throwJSException(err.Error())
+	}
+	return val
+}
+
+func (b *bridge) Ccinvoketx(call otto.FunctionCall) (response otto.Value) {
+	if !call.Argument(0).IsString() {
+		throwJSException("1 argument must be account address string to unlock")
+	}
+	if !call.Argument(1).IsString() {
+		throwJSException("2 argument must be account address string to receive token")
+	}
+	from := call.Argument(0)
+	to := call.Argument(1)
+
+	//2 index, amount
+	//3 index, fee
+	amount := call.Argument(2)
+	fee := call.Argument(3)
+	deployId := call.Argument(4)
+
+	params := call.Argument(5)
+
+	certID := otto.NullValue()
+	if call.Argument(6).IsDefined() && !call.Argument(6).IsNull() {
+		certID = call.Argument(6)
+	}
+
+	timeout := otto.NullValue()
+	if call.Argument(7).IsDefined() && !call.Argument(7).IsNull() {
+		timeout = call.Argument(7)
+	}
+	// Send the request to the backend and return
+	val, err := call.Otto.Call("jptn.ccinvoketx", nil, from, to, amount, fee, deployId, params, certID, timeout)
+	if err != nil {
+		throwJSException(err.Error())
+	}
+	return val
+}
+
 // TransferPtn is a wrapper around the personal.TransferPtn RPC method that
 // uses a non-echoing password prompt to acquire the passphrase and executes the
 // original RPC method (saved in jptn.TransferPtn) with it to actually execute
@@ -360,16 +462,6 @@ func (b *bridge) TransferPtn(call otto.FunctionCall) (response otto.Value) {
 
 	// Send the request to the backend and return
 	val, err := call.Otto.Call("jptn.transferPtn", nil, from, to, amount, text, password)
-	if err != nil {
-		throwJSException(err.Error())
-	}
-
-	return val
-}
-
-func (b *bridge) LlistAccounts(call otto.FunctionCall) (response otto.Value) {
-	// Send the request to the backend and return
-	val, err := call.Otto.Call("jptn.llistAccounts", nil)
 	if err != nil {
 		throwJSException(err.Error())
 	}

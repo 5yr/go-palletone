@@ -18,11 +18,9 @@
 package ptn
 
 import (
+	"encoding/json"
 	"fmt"
-	"sync"
-
 	"github.com/palletone/go-palletone/common"
-	"github.com/palletone/go-palletone/common/bloombits"
 	"github.com/palletone/go-palletone/common/event"
 	"github.com/palletone/go-palletone/common/log"
 	"github.com/palletone/go-palletone/common/p2p"
@@ -40,21 +38,24 @@ import (
 	"github.com/palletone/go-palletone/dag"
 	"github.com/palletone/go-palletone/dag/dagconfig"
 	"github.com/palletone/go-palletone/dag/modules"
+	"github.com/palletone/go-palletone/dag/palletcache"
 	"github.com/palletone/go-palletone/dag/storage"
 	"github.com/palletone/go-palletone/dag/txspool"
 	"github.com/palletone/go-palletone/internal/ptnapi"
 	"github.com/palletone/go-palletone/ptn/downloader"
-	"github.com/palletone/go-palletone/ptn/filters"
-	"github.com/palletone/go-palletone/ptn/indexer"
 	"github.com/palletone/go-palletone/ptnjson"
 	"github.com/palletone/go-palletone/tokenengine"
 	"github.com/shopspring/decimal"
 )
 
 type LesServer interface {
-	Start(srvr *p2p.Server)
+	Start(srvr *p2p.Server, corss *p2p.Server, syncCh chan bool)
 	Stop()
 	Protocols() []p2p.Protocol
+	CorsProtocols() []p2p.Protocol
+	StartCorsSync() (string, error)
+
+	SubscribeCeEvent(ch chan<- *modules.Header) event.Subscription
 }
 
 // PalletOne implements the PalletOne full node service.
@@ -84,24 +85,30 @@ type PalletOne struct {
 
 	contract *contracts.Contract
 
-	lock sync.RWMutex // Protects the variadic fields (e.g. gas price and etherbase)
-
-	bloomRequests chan chan *bloombits.Retrieval // Channel receiving bloom data retrieval requests
-	bloomIndexer  *indexer.ChainIndexer          // Bloom indexer operating during block imports
+	//bloomRequests chan chan *bloombits.Retrieval // Channel receiving bloom data retrieval requests
+	//bloomIndexer  *indexer.ChainIndexer          // Bloom indexer operating during block imports
 
 	// append by Albert·Gou
 	mediatorPlugin    *mp.MediatorPlugin
 	contractPorcessor *jury.Processor
+
+	//cors
+	corsServer LesServer
+	syncCh     chan bool
 }
 
 func (p *PalletOne) AddLesServer(ls LesServer) {
 	p.lesServer = ls
-	//ls.SetBloomBitsIndexer(p.bloomIndexer)
+}
+
+func (p *PalletOne) AddCorsServer(cs LesServer) *PalletOne {
+	p.corsServer = cs
+	return p
 }
 
 // New creates a new PalletOne object (including the
 // initialisation of the common PalletOne object)
-func New(ctx *node.ServiceContext, config *Config) (*PalletOne, error) {
+func New(ctx *node.ServiceContext, config *Config, cache palletcache.ICache) (*PalletOne, error) {
 	if !config.SyncMode.IsValid() {
 		return nil, fmt.Errorf("invalid sync mode %d", config.SyncMode)
 	}
@@ -111,12 +118,14 @@ func New(ctx *node.ServiceContext, config *Config) (*PalletOne, error) {
 		log.Error("PalletOne New", "CreateDB err:", err)
 		return nil, err
 	}
-	dag, err := dag.NewDag(db)
+	dag, err := dag.NewDag(db, cache, false)
 	if err != nil {
 		log.Error("PalletOne New", "NewDag err:", err)
 		return nil, err
 	}
+
 	dag.RefreshSysParameters()
+
 	ptn := &PalletOne{
 		config:         config,
 		eventMux:       ctx.EventMux,
@@ -125,21 +134,19 @@ func New(ctx *node.ServiceContext, config *Config) (*PalletOne, error) {
 		networkId:      config.NetworkId,
 		dag:            dag,
 		unitDb:         db,
-		//bloomRequests:  make(chan chan *bloombits.Retrieval),
-		//bloomIndexer:   NewBloomIndexer(db, BloomBitsBlocks),
+		syncCh:         make(chan bool, 1),
 	}
-	log.Info("Initialising PalletOne protocol", "versions", ProtocolVersions, "network", config.NetworkId)
+	log.Info("Initializing PalletOne protocol", "versions", ProtocolVersions, "network", config.NetworkId)
 
 	if config.TxPool.Journal != "" {
 		config.TxPool.Journal = ctx.ResolvePath(config.TxPool.Journal)
 	}
-	pool := txspool.NewTxPool(config.TxPool, ptn.dag)
-	ptn.txPool = pool
+	ptn.txPool = txspool.NewTxPool(config.TxPool, cache, ptn.dag, tokenengine.Instance)
 
 	//Test for P2P
-	ptn.engine = consensus.New(dag, pool)
+	ptn.engine = consensus.New(dag, ptn.txPool)
 
-	ptn.mediatorPlugin, err = mp.NewMediatorPlugin(ptn, dag, &config.MediatorPlugin)
+	ptn.mediatorPlugin, err = mp.NewMediatorPlugin( /*ctx, */ &config.MediatorPlugin, ptn, dag)
 	if err != nil {
 		log.Error("Initialize mediator plugin err:", "error", err)
 		return nil, err
@@ -151,7 +158,7 @@ func New(ctx *node.ServiceContext, config *Config) (*PalletOne, error) {
 		return nil, err
 	}
 
-	aJury := &consensus.AdapterJury{ptn.contractPorcessor}
+	aJury := &consensus.AdapterJury{Processor: ptn.contractPorcessor}
 	ptn.contract, err = contracts.Initialize(ptn.dag, aJury, &config.Contract)
 	if err != nil {
 		log.Error("Contract Initialize err:", "error", err)
@@ -166,7 +173,6 @@ func New(ctx *node.ServiceContext, config *Config) (*PalletOne, error) {
 	}
 
 	gasToken := config.Dag.GetGasToken()
-	//ptn.bloomIndexer.Start(dag, gasToken)
 	if ptn.protocolManager, err = NewProtocolManager(config.SyncMode, config.NetworkId, gasToken, ptn.txPool,
 		ptn.dag, ptn.eventMux, ptn.mediatorPlugin, genesis, ptn.contractPorcessor, ptn.engine); err != nil {
 		log.Error("NewProtocolManager err:", "error", err)
@@ -188,9 +194,11 @@ func CreateDB(ctx *node.ServiceContext, config *Config /*, name string*/) (palle
 	if err != nil {
 		return nil, err
 	}
+
 	//	if db, ok := db.(*palletdb.LDBDatabase); ok {
 	//		db.Meter("eth/db/chaindata/")
 	//	}
+
 	return db, nil
 }
 
@@ -216,12 +224,12 @@ func (s *PalletOne) APIs() []rpc.API {
 			Service:   downloader.NewPublicDownloaderAPI(s.protocolManager.downloader, s.eventMux),
 			Public:    true,
 		},
-		{
+		/*{
 			Namespace: "ptn",
 			Version:   "1.0",
 			Service:   filters.NewPublicFilterAPI(s.ApiBackend, false),
 			Public:    true,
-		}, {
+		}, */{
 			Namespace: "admin",
 			Version:   "1.0",
 			//Service:   NewPrivateAdminAPI(s),
@@ -245,19 +253,21 @@ func (s *PalletOne) NetVersion() uint64                 { return s.networkId }
 func (s *PalletOne) Downloader() *downloader.Downloader { return s.protocolManager.downloader }
 func (s *PalletOne) Dag() dag.IDag                      { return s.dag }
 func (s *PalletOne) UnitDb() ptndb.Database             { return s.unitDb }
-
 func (s *PalletOne) ContractProcessor() *jury.Processor { return s.contractPorcessor }
 func (s *PalletOne) ProManager() *ProtocolManager       { return s.protocolManager }
-func (s *PalletOne) GetLesServer() LesServer            { return s.lesServer }
 
 func (s *PalletOne) MockContractLocalSend(event jury.ContractEvent) {
 	s.protocolManager.ContractReqLocalSend(event)
 }
 func (s *PalletOne) ContractBroadcast(event jury.ContractEvent, local bool) {
+	log.DebugDynamic(func() string {
+		evtJson, _ := json.Marshal(event)
+		return fmt.Sprintf("contract broadcast event:%s", string(evtJson))
+	})
 	s.protocolManager.ContractBroadcast(event, local)
 }
-func (s *PalletOne) ElectionBroadcast(event jury.ElectionEvent) {
-	s.protocolManager.ElectionBroadcast(event)
+func (s *PalletOne) ElectionBroadcast(event jury.ElectionEvent, local bool) {
+	s.protocolManager.ElectionBroadcast(event, local)
 }
 func (s *PalletOne) AdapterBroadcast(event jury.AdapterEvent) {
 	s.protocolManager.AdapterBroadcast(event)
@@ -266,8 +276,17 @@ func (s *PalletOne) AdapterBroadcast(event jury.AdapterEvent) {
 func (s *PalletOne) GetLocalMediators() []common.Address {
 	return s.mediatorPlugin.LocalMediators()
 }
+
+func (s *PalletOne) GetLocalActiveMediators() []common.Address {
+	return s.mediatorPlugin.GetLocalActiveMediators()
+}
+
 func (s *PalletOne) IsLocalActiveMediator(addr common.Address) bool {
 	return s.mediatorPlugin.IsLocalActiveMediator(addr)
+}
+
+func (s *PalletOne) LocalHaveActiveMediator() bool {
+	return s.mediatorPlugin.LocalHaveActiveMediator()
 }
 
 // Protocols implements node.Service, returning all the currently configured
@@ -276,40 +295,54 @@ func (s *PalletOne) Protocols() []p2p.Protocol {
 	if s.lesServer == nil {
 		return s.protocolManager.SubProtocols
 	}
-	return append(s.protocolManager.SubProtocols, s.lesServer.Protocols()...)
+	protocols := append(s.protocolManager.SubProtocols, s.lesServer.Protocols()...)
+	return protocols
+}
+
+func (s *PalletOne) GenesisHash() common.Hash {
+	if unit, err := s.dag.GetGenesisUnit(); err != nil {
+		return common.Hash{}
+	} else {
+		return unit.Hash()
+	}
+}
+
+func (s *PalletOne) CorsProtocols() []p2p.Protocol {
+	if s.corsServer != nil {
+		return s.corsServer.CorsProtocols()
+	}
+	return nil
+}
+
+func (s *PalletOne) CorsServer() LesServer {
+	return s.corsServer
 }
 
 // Start implements node.Service, starting all internal goroutines needed by the
 // PalletOne protocol implementation.
-func (s *PalletOne) Start(srvr *p2p.Server) error {
-	// Start the bloom bits servicing goroutines
-	//s.startBloomHandlers()
-
+func (s *PalletOne) Start(srvr *p2p.Server, corss *p2p.Server) error {
 	// Start the RPC service
 	s.netRPCService = ptnapi.NewPublicNetAPI(srvr, s.NetVersion())
-
-	// Figure out a max peers count based on the server limits
-	//maxPeers := srvr.MaxPeers
-
-	// Start the networking layer and the light server if requested
-	//s.protocolManager.Start(srvr, maxPeers)
-
 	s.contractPorcessor.Start(srvr)
-
 	s.mediatorPlugin.Start(srvr)
 
 	maxPeers := srvr.MaxPeers
 	if s.config.LightServ > 0 {
 		if s.config.LightPeers >= srvr.MaxPeers {
-			return fmt.Errorf("invalid peer config: light peer count (%d) >= total peer count (%d)", s.config.LightPeers, srvr.MaxPeers)
+			return fmt.Errorf("invalid peer config: light peer count (%d) >= total peer count (%d)",
+				s.config.LightPeers, srvr.MaxPeers)
 		}
 		maxPeers -= s.config.LightPeers
 	}
 	// Start the networking layer and the light server if requested
-	s.protocolManager.Start(srvr, maxPeers)
 	if s.lesServer != nil {
-		s.lesServer.Start(srvr)
+		s.lesServer.Start(srvr, corss, s.syncCh)
 	}
+	if s.corsServer != nil {
+		s.corsServer.Start(srvr, corss, s.syncCh)
+	}
+
+	s.protocolManager.Start(srvr, maxPeers, s.syncCh)
 	return nil
 }
 
@@ -328,11 +361,14 @@ func (s *PalletOne) Stop() error {
 	// append by Albert·Gou
 	s.mediatorPlugin.Stop()
 
-	s.dag.Close()
 	if s.lesServer != nil {
 		s.lesServer.Stop()
 	}
 
+	if s.corsServer != nil {
+		s.corsServer.Stop()
+	}
+	s.dag.Close()
 	return nil
 }
 
@@ -371,8 +407,8 @@ func (p *PalletOne) SignGenericTransaction(from common.Address, tx *modules.Tran
 
 	// 3. 使用tokenengine 和 KeyStore 给 tx 签名
 	ks := p.GetKeyStore()
-	_, err := tokenengine.SignTxAllPaymentInput(tx, tokenengine.SigHashAll, inputpoints, nil,
-		ks.GetPublicKey, ks.SignHash)
+	_, err := tokenengine.Instance.SignTxAllPaymentInput(tx, tokenengine.SigHashAll, inputpoints, nil,
+		ks.GetPublicKey, ks.SignMessage)
 	if err != nil {
 		return nil, err
 	}
@@ -390,7 +426,7 @@ func (p *PalletOne) SignAndSendTransaction(addr common.Address, tx *modules.Tran
 
 	// 4. 将 tx 放入 pool
 	txPool := p.TxPool()
-	err = txPool.AddLocal(txspool.TxtoTxpoolTx(txPool, tx))
+	err = txPool.AddLocal(tx)
 	if err != nil {
 		return err
 	}
@@ -398,7 +434,8 @@ func (p *PalletOne) SignAndSendTransaction(addr common.Address, tx *modules.Tran
 }
 
 // @author Albert·Gou
-func (p *PalletOne) TransferPtn(from, to string, amount decimal.Decimal, text *string) (*mp.TxExecuteResult, error) {
+func (p *PalletOne) TransferPtn(from, to string, amount decimal.Decimal,
+	text *string) (*ptnapi.TxExecuteResult, error) {
 	// 参数检查
 	if from == to {
 		return nil, fmt.Errorf("please don't transfer ptn to yourself: %v", from)
@@ -419,9 +456,9 @@ func (p *PalletOne) TransferPtn(from, to string, amount decimal.Decimal, text *s
 	}
 
 	// 判断本节点是否同步完成，数据是否最新
-	//if !p.dag.IsSynced() {
-	//	return nil, fmt.Errorf("the data of this node is not synced, and can't transfer now")
-	//}
+	if !p.dag.IsSynced() {
+		return nil, fmt.Errorf("the data of this node is not synced, and can't transfer now")
+	}
 
 	// 1. 创建交易
 	tx, fee, err := p.dag.GenTransferPtnTx(fromAdd, toAdd, ptnjson.Ptn2Dao(amount), text, p.txPool)
@@ -441,13 +478,13 @@ func (p *PalletOne) TransferPtn(from, to string, amount decimal.Decimal, text *s
 		textStr = *text
 	}
 
-	res := &mp.TxExecuteResult{}
-	res.TxContent = fmt.Sprintf("Account(%s) transfer %vPTN to account(%s) with message: '%s'",
+	res := &ptnapi.TxExecuteResult{}
+	res.TxContent = fmt.Sprintf("Account(%v) transfer %vPTN to account(%v) with message: '%v'",
 		from, amount, to, textStr)
 	res.TxHash = tx.Hash()
 	res.TxSize = tx.Size().TerminalString()
 	res.TxFee = fmt.Sprintf("%vdao", fee)
-	res.Warning = mp.DefaultResult
+	res.Warning = ptnapi.DefaultResult
 
 	return res, nil
 }

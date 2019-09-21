@@ -34,75 +34,39 @@ var strings = [...]string{"", "Hello", "foo", "bar", "foo", "f00", "%*&^*&^&", "
 
 func TestPartialSortIntSlice(t *testing.T) {
 	data := ints
-
 	a := sort.IntSlice(data[0:])
-	n := a.Len()
 
 	m := 4
-	p := sort.IntSlice(data[:m])
-
 	csort.PartialSort(a, m)
-	if !sort.IsSorted(p) {
+
+	if !csort.IsPartialSorted(a, m) {
 		t.Errorf("sorted %v", ints)
 		t.Errorf("   got %v", data)
-		return
-	}
-
-	for i := m; i < n; i++ {
-		if a.Less(i, m-1) {
-			t.Errorf("sorted %v", ints)
-			t.Errorf("   got %v", data)
-		}
-		return
 	}
 }
 
 func TestPartialSortFloat64Slice(t *testing.T) {
 	data := float64s
-
 	a := sort.Float64Slice(data[0:])
-	n := a.Len()
 
 	m := 5
-	p := sort.Float64Slice(data[:m])
-
 	csort.PartialSort(a, m)
-	if !sort.IsSorted(p) {
-		t.Errorf("sorted %v", float64s)
-		t.Errorf("   got %v", data)
-		return
-	}
 
-	for i := m; i < n; i++ {
-		if a.Less(i, m-1) {
-			t.Errorf("sorted %v", ints)
-			t.Errorf("   got %v", data)
-			return
-		}
+	if !csort.IsPartialSorted(a, m) {
+		t.Errorf("sorted %v", ints)
+		t.Errorf("   got %v", data)
 	}
 }
 
 func TestPartialSortStringSlice(t *testing.T) {
 	data := strings
-
 	a := sort.StringSlice(data[0:])
-	n := a.Len()
 
 	m := 3
-	p := sort.StringSlice(data[:m])
-
 	csort.PartialSort(a, m)
-	if !sort.IsSorted(p) {
-		t.Errorf("sorted %v", strings)
-		t.Errorf("   got %v", data)
-		return
-	}
 
-	for i := m; i < n; i++ {
-		if a.Less(i, m-1) {
-			t.Errorf("sorted %v", ints)
-			t.Errorf("   got %v", data)
-			return
-		}
+	if !csort.IsPartialSorted(a, m) {
+		t.Errorf("sorted %v", ints)
+		t.Errorf("   got %v", data)
 	}
 }

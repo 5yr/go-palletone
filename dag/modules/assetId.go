@@ -21,13 +21,14 @@
 package modules
 
 import (
+	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"strings"
 
 	"github.com/martinlindhe/base36"
-
-	"bytes"
-	"strings"
+	"github.com/palletone/go-palletone/common/bitutil"
 )
 
 var (
@@ -36,11 +37,11 @@ var (
 	BTCCOIN          = AssetId{'b', 't', 'c', 'c', 'o', 'i', 'n'}
 )
 
-// type 	Hash 		[]byte
 const (
 	ID_LENGTH = 16
 )
 
+//AssetId 资产类别,前26bit是symbol的base36编码，27-29是Symbol编码后字节长度，30-32bit为AssetType，剩下的是Txid的前12字节
 type AssetId [ID_LENGTH]byte
 
 func ZeroIdType16() AssetId {
@@ -52,33 +53,42 @@ func (it AssetId) String() string {
 		return "PTN"
 	}
 	symbol, assetType, decimal, txHash, uidType := it.ParseAssetId()
-	//b12 := make([]byte, 11)
-	//b12[0] = decimal
-	//copy(b12[1:], txHash)
-	type2 := byte(assetType)<<2 | byte(uidType)
-	return symbol + "+" + base36.EncodeBytes([]byte{decimal}) + base36.EncodeBytes([]byte{type2}) + base36.EncodeBytes(txHash)
+	if bitutil.IsZero(txHash) { //不是合约创建的Token，而是创世单元生成的Token
+		if assetType == AssetType_FungibleToken && decimal == 8 {
+			return symbol
+		}
+	}
 
+	type2 := byte(assetType)<<3 | byte(uidType)
+	rst := symbol + "+" + base36.EncodeBytes([]byte{decimal})
+	rst += base36.EncodeBytes([]byte{type2})
+	rst += base36.EncodeBytes(txHash)
+	return rst
 }
 
 func String2AssetId(str string) (AssetId, UniqueIdType, error) {
+	str = strings.ToUpper(str)
 	if str == "PTN" {
 		return PTNCOIN, UniqueIdType_Null, nil
 	}
 	strArray := strings.Split(str, "+")
 	if len(strArray) < 2 {
-		return AssetId{}, UniqueIdType_Null, errors.New("Asset string invalid")
+		asset, err := NewAssetId(strArray[0], AssetType_FungibleToken, 8,
+			[]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, UniqueIdType_Null)
+		return asset, UniqueIdType_Null, err
 	}
 	symbol := strArray[0]
 	type2 := base36.DecodeToBytes(string(strArray[1][1]))[0]
-	assetType := AssetType(type2 >> 2)
-	uniqueIdType := UniqueIdType(type2 & 3)
+	assetType := AssetType(type2 >> 3)
+	uniqueIdType := UniqueIdType(type2 & 7)
 	decimal := base36.DecodeToBytes(strArray[1][0:1])
 	tx12 := base36.DecodeToBytes(strArray[1][2:])
 	assetId, err := NewAssetId(symbol, assetType, decimal[0], tx12, uniqueIdType)
 	return assetId, uniqueIdType, err
 }
 
-func NewAssetId(symbol string, assetType AssetType, decimal byte, requestId []byte, uniqueIdType UniqueIdType) (AssetId, error) {
+func NewAssetId(symbol string, assetType AssetType, decimal byte, requestId []byte,
+	uniqueIdType UniqueIdType) (AssetId, error) {
 	if len(symbol) > 5 || len(symbol) == 0 {
 		return AssetId{}, errors.New("Symbol must less than 5 characters")
 	}
@@ -90,7 +100,6 @@ func NewAssetId(symbol string, assetType AssetType, decimal byte, requestId []by
 	}
 	assetId := AssetId{}
 	assetSymbol := base36.DecodeToBytes(symbol)
-	//fmt.Printf(base36.EncodeBytes(assetSymbol))
 	copy(assetId[4-len(assetSymbol):4], assetSymbol)
 	firstByte := assetId[0] | (byte(len(assetSymbol) << 5))
 	firstByte = firstByte | byte(assetType)<<2
@@ -123,6 +132,9 @@ func (id AssetId) GetAssetType() AssetType {
 	t := (id[0] & 0xc) >> 2
 	return AssetType(t)
 }
+func (id AssetId) GetDecimal() byte {
+	return id[4] & 0x1f
+}
 func (id AssetId) ToAsset() *Asset {
 	return &Asset{AssetId: id}
 }
@@ -130,20 +142,7 @@ func (asset AssetId) Equal(another AssetId) bool {
 	return bytes.Equal(asset.Bytes(), another.Bytes())
 }
 
-//func (it *AssetId) Str() string {
-//	return hex.EncodeToString(it.Bytes())
-//}
-
-//func (it *AssetId) TokenType() string {
-//	return string(it.Bytes()[:])
-//}
-
 func (it AssetId) Bytes() []byte {
-	//idBytes := make([]byte, len(it))
-	//for i := 0; i < len(it); i++ {
-	//	idBytes[i] = it[i]
-	//}
-	//return idBytes
 	return it[:]
 }
 
@@ -163,4 +162,22 @@ func SetIdTypeByHex(id string) (AssetId, error) {
 	var id_type AssetId
 	copy(id_type[0:], bytes)
 	return id_type, nil
+}
+
+func (assetId AssetId) MarshalJSON() ([]byte, error) {
+	return json.Marshal(assetId.String())
+}
+
+func (assetId *AssetId) UnmarshalJSON(data []byte) error {
+	var str string
+	err := json.Unmarshal(data, &str)
+	if err != nil {
+		return err
+	}
+	a, _, err := String2AssetId(str)
+	if err != nil {
+		return err
+	}
+	assetId.SetBytes(a.Bytes())
+	return nil
 }

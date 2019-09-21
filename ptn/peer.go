@@ -28,8 +28,8 @@ import (
 	"github.com/palletone/go-palletone/common/p2p"
 	"github.com/palletone/go-palletone/consensus/jury"
 	//"github.com/palletone/go-palletone/dag/dagconfig"
+	set "github.com/deckarep/golang-set"
 	"github.com/palletone/go-palletone/dag/modules"
-	"gopkg.in/fatih/set.v0"
 	"strings"
 )
 
@@ -63,8 +63,9 @@ type PeerInfo struct {
 }
 
 type peerMsg struct {
-	head   common.Hash
-	number *modules.ChainIndex
+	head         common.Hash
+	number       *modules.ChainIndex
+	stableNumber *modules.ChainIndex
 }
 
 type peer struct {
@@ -73,19 +74,19 @@ type peer struct {
 	*p2p.Peer
 	rw p2p.MsgReadWriter
 
-	version  int         // Protocol version negotiated
-	forkDrop *time.Timer // Timed connection dropper if forks aren't validated in time
+	version int // Protocol version negotiated
+	//forkDrop *time.Timer // Timed connection dropper if forks aren't validated in time
 
 	peermsg map[modules.AssetId]peerMsg
 	lock    sync.RWMutex
 
-	lightpeermsg map[modules.AssetId]peerMsg
-	lightlock    sync.RWMutex
+	//lightpeermsg map[modules.AssetId]peerMsg
+	//lightlock    sync.RWMutex
 
-	knownTxs          *set.Set // Set of transaction hashes known to be known by this peer
-	knownBlocks       *set.Set // Set of block hashes known to be known by this peer
-	knownLightHeaders *set.Set
-	knownGroupSig     *set.Set // Set of block hashes known to be known by this peer
+	knownTxs          set.Set // Set of transaction hashes known to be known by this peer
+	knownBlocks       set.Set // Set of block hashes known to be known by this peer
+	knownLightHeaders set.Set
+	knownGroupSig     set.Set // Set of block hashes known to be known by this peer
 }
 
 func newPeer(version int, p *p2p.Peer, rw p2p.MsgReadWriter) *peer {
@@ -96,18 +97,19 @@ func newPeer(version int, p *p2p.Peer, rw p2p.MsgReadWriter) *peer {
 		rw:                rw,
 		version:           version,
 		id:                id.TerminalString(),
-		knownTxs:          set.New(),
-		knownBlocks:       set.New(),
-		knownLightHeaders: set.New(),
-		knownGroupSig:     set.New(),
+		knownTxs:          set.NewSet(),
+		knownBlocks:       set.NewSet(),
+		knownLightHeaders: set.NewSet(),
+		knownGroupSig:     set.NewSet(),
 		peermsg:           map[modules.AssetId]peerMsg{},
-		lightpeermsg:      map[modules.AssetId]peerMsg{},
+		//lightpeermsg:      map[modules.AssetId]peerMsg{},
 	}
 }
 
 // Info gathers and returns a collection of metadata known about a peer.
-func (p *peer) Info(protocal string) *PeerInfo {
-	asset, err := modules.NewAsset(strings.ToUpper(protocal), modules.AssetType_FungibleToken, 8, []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, modules.UniqueIdType_Null, modules.UniqueId{})
+func (p *peer) Info(protocol string) *PeerInfo {
+	asset, err := modules.NewAsset(strings.ToUpper(protocol), modules.AssetType_FungibleToken,
+		8, []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, modules.UniqueIdType_Null, modules.UniqueId{})
 	if err != nil {
 		log.Error("peer info asset err", err)
 		return &PeerInfo{}
@@ -128,6 +130,17 @@ func (p *peer) Info(protocal string) *PeerInfo {
 	}
 }
 
+func (p *peer) StableIndex(assetID modules.AssetId) (stableIndex *modules.ChainIndex) {
+	p.lock.RLock()
+	defer p.lock.RUnlock()
+
+	msg, ok := p.peermsg[assetID]
+	if ok {
+		stableIndex = msg.stableNumber
+	}
+	return stableIndex
+}
+
 // Head retrieves a copy of the current head hash and total difficulty of the
 // peer.
 //only retain the max index header.will in other mediator,not in ptn mediator.
@@ -145,49 +158,34 @@ func (p *peer) Head(assetID modules.AssetId) (hash common.Hash, number *modules.
 
 // SetHead updates the head hash and total difficulty of the peer.
 //only retain the max index header
-func (p *peer) SetHead(hash common.Hash, number *modules.ChainIndex) {
+func (p *peer) SetHead(hash common.Hash, number, index *modules.ChainIndex) {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
 	msg, ok := p.peermsg[number.AssetID]
+	tempstableIndex := &modules.ChainIndex{}
+	if ok && index == nil {
+		tempstableIndex = msg.stableNumber
+	}
 
 	if (ok && number.Index > msg.number.Index) || !ok {
 		copy(msg.head[:], hash[:])
 		msg.number = number
+		if index != nil {
+			msg.stableNumber = index
+		} else {
+			msg.stableNumber = tempstableIndex
+		}
+
 	}
 	p.peermsg[number.AssetID] = msg
-}
-
-func (p *peer) LightHead(assetID modules.AssetId) (hash common.Hash, number *modules.ChainIndex) {
-	p.lightlock.RLock()
-	defer p.lightlock.RUnlock()
-
-	msg, ok := p.lightpeermsg[assetID]
-	if ok {
-		copy(hash[:], msg.head[:])
-		number = msg.number
-	}
-	return hash, number
-}
-
-func (p *peer) SetLightHead(hash common.Hash, number *modules.ChainIndex) {
-	p.lightlock.Lock()
-	defer p.lightlock.Unlock()
-
-	msg, ok := p.lightpeermsg[number.AssetID]
-
-	if (ok && number.Index > msg.number.Index) || !ok {
-		copy(msg.head[:], hash[:])
-		msg.number = number
-	}
-	p.lightpeermsg[number.AssetID] = msg
 }
 
 // MarkBlock marks a block as known for the peer, ensuring that the block will
 // never be propagated to this particular peer.
 func (p *peer) MarkUnit(hash common.Hash) {
 	// If we reached the memory allowance, drop a previously known block hash
-	for p.knownBlocks.Size() >= maxKnownBlocks {
+	for p.knownBlocks.Cardinality() >= maxKnownBlocks {
 		p.knownBlocks.Pop()
 	}
 	p.knownBlocks.Add(hash)
@@ -197,7 +195,7 @@ func (p *peer) MarkUnit(hash common.Hash) {
 // never be propagated to this particular peer.
 func (p *peer) MarkGroupSig(hash common.Hash) {
 	// If we reached the memory allowance, drop a previously known block hash
-	for p.knownGroupSig.Size() >= maxKnownBlocks {
+	for p.knownGroupSig.Cardinality() >= maxKnownBlocks {
 		p.knownGroupSig.Pop()
 	}
 	p.knownGroupSig.Add(hash)
@@ -207,7 +205,7 @@ func (p *peer) MarkGroupSig(hash common.Hash) {
 // will never be propagated to this particular peer.
 func (p *peer) MarkTransaction(hash common.Hash) {
 	// If we reached the memory allowance, drop a previously known transaction hash
-	for p.knownTxs.Size() >= maxKnownTxs {
+	for p.knownTxs.Cardinality() >= maxKnownTxs {
 		p.knownTxs.Pop()
 	}
 	p.knownTxs.Add(hash)
@@ -215,7 +213,7 @@ func (p *peer) MarkTransaction(hash common.Hash) {
 
 func (p *peer) MarkLightHeader(hash common.Hash) {
 	// If we reached the memory allowance, drop a previously known transaction hash
-	for p.knownLightHeaders.Size() >= maxKnownTxs {
+	for p.knownLightHeaders.Cardinality() >= maxKnownTxs {
 		p.knownLightHeaders.Pop()
 	}
 	p.knownLightHeaders.Add(hash)
@@ -324,22 +322,24 @@ func (p *peer) SendReceiptsRLP(receipts []rlp.RawValue) error {
 // single header. It is used solely by the fetcher.
 func (p *peer) RequestOneHeader(hash common.Hash) error {
 	log.Debug("Fetching single header", "hash", hash)
-	return p2p.Send(p.rw, GetBlockHeadersMsg, &getBlockHeadersData{Origin: hashOrNumber{Hash: hash}, Amount: uint64(1), Skip: uint64(0), Reverse: false})
+	return p2p.Send(p.rw, GetBlockHeadersMsg, &getBlockHeadersData{Origin: hashOrNumber{Hash: hash},
+		Amount: uint64(1), Skip: uint64(0), Reverse: false})
 }
 
 // RequestHeadersByHash fetches a batch of blocks' headers corresponding to the
 // specified header query, based on the hash of an origin block.
 func (p *peer) RequestHeadersByHash(origin common.Hash, amount int, skip int, reverse bool) error {
 	log.Debug("Fetching batch of headers", "count", amount, "fromhash", origin, "skip", skip, "reverse", reverse)
-	return p2p.Send(p.rw, GetBlockHeadersMsg, &getBlockHeadersData{Origin: hashOrNumber{Hash: origin}, Amount: uint64(amount), Skip: uint64(skip), Reverse: reverse})
+	return p2p.Send(p.rw, GetBlockHeadersMsg, &getBlockHeadersData{Origin: hashOrNumber{Hash: origin},
+		Amount: uint64(amount), Skip: uint64(skip), Reverse: reverse})
 }
 
 // RequestDagHeadersByHash fetches a batch of blocks' headers corresponding to the
 // specified header query, based on the hash of an origin block.
-func (p *peer) RequestDagHeadersByHash(origin common.Hash, amount int, skip int, reverse bool) error {
-	//log.Debug("Fetching batch of headers", "count", amount, "fromhash", origin, "skip", skip, "reverse", reverse)
-	return nil
-}
+//func (p *peer) RequestDagHeadersByHash(origin common.Hash, amount int, skip int, reverse bool) error {
+//	//log.Debug("Fetching batch of headers", "count", amount, "fromhash", origin, "skip", skip, "reverse", reverse)
+//	return nil
+//}
 
 func (p *peer) RequestLeafNodes() error {
 	//GetLeafNodes
@@ -351,7 +351,8 @@ func (p *peer) RequestLeafNodes() error {
 // specified header query, based on the number of an origin block.
 func (p *peer) RequestHeadersByNumber(origin *modules.ChainIndex, amount int, skip int, reverse bool) error {
 	log.Debug("Fetching batch of headers", "count", amount, "index", origin.Index, "skip", skip, "reverse", reverse)
-	return p2p.Send(p.rw, GetBlockHeadersMsg, &getBlockHeadersData{Origin: hashOrNumber{Number: *origin}, Amount: uint64(amount), Skip: uint64(skip), Reverse: reverse})
+	return p2p.Send(p.rw, GetBlockHeadersMsg, &getBlockHeadersData{Origin: hashOrNumber{Number: *origin},
+		Amount: uint64(amount), Skip: uint64(skip), Reverse: reverse})
 }
 
 // RequestBodies fetches a batch of blocks' bodies corresponding to the hashes
@@ -376,8 +377,8 @@ func (p *peer) RequestReceipts(hashes []common.Hash) error {
 
 // Handshake executes the ptn protocol handshake, negotiating version number,
 // network IDs, difficulties, head and genesis blocks.
-func (p *peer) Handshake(network uint64, index *modules.ChainIndex, genesis common.Hash,
-	/*mediator bool,*/ headHash common.Hash) error {
+func (p *peer) Handshake(network uint64, index *modules.ChainIndex, genesis common.Hash, headHash common.Hash,
+	stable *modules.ChainIndex) error {
 	// Send out own handshake in a new thread
 	errc := make(chan error, 2)
 	var status statusData // safe to read after two values have been received from errc
@@ -389,6 +390,7 @@ func (p *peer) Handshake(network uint64, index *modules.ChainIndex, genesis comm
 			Index:           index,
 			GenesisUnit:     genesis,
 			CurrentHeader:   headHash,
+			//StableIndex:     stable,
 		})
 	}()
 	go func() {
@@ -406,8 +408,10 @@ func (p *peer) Handshake(network uint64, index *modules.ChainIndex, genesis comm
 			return p2p.DiscReadTimeout
 		}
 	}
-
-	p.SetHead(status.CurrentHeader, status.Index)
+	//stableIndex :=&modules.ChainIndex{Index:uint64(1085100)}
+	stableIndex :=&modules.ChainIndex{Index:uint64(1)}
+	log.Debug("peer Handshake", "p.id", p.id, "index", status.Index, "stable", stableIndex)//status.StableIndex)
+	p.SetHead(status.CurrentHeader, status.Index, stableIndex)//status.StableIndex)
 	return nil
 }
 
@@ -514,7 +518,7 @@ func (ps *peerSet) PeersWithoutUnit(hash common.Hash) []*peer {
 
 	list := make([]*peer, 0, len(ps.peers))
 	for _, p := range ps.peers {
-		if !p.knownBlocks.Has(hash) {
+		if !p.knownBlocks.Contains(hash) {
 			list = append(list, p)
 		}
 	}
@@ -527,7 +531,7 @@ func (ps *peerSet) PeersWithoutLightHeader(hash common.Hash) []*peer {
 
 	list := make([]*peer, 0, len(ps.peers))
 	for _, p := range ps.peers {
-		if !p.knownLightHeaders.Has(hash) {
+		if !p.knownLightHeaders.Contains(hash) {
 			list = append(list, p)
 		}
 	}
@@ -541,7 +545,7 @@ func (ps *peerSet) PeersWithoutGroupSig(hash common.Hash) []*peer {
 
 	list := make([]*peer, 0, len(ps.peers))
 	for _, p := range ps.peers {
-		if !p.knownGroupSig.Has(hash) {
+		if !p.knownGroupSig.Contains(hash) {
 			list = append(list, p)
 		}
 	}
@@ -556,7 +560,7 @@ func (ps *peerSet) PeersWithoutTx(hash common.Hash) []*peer {
 
 	list := make([]*peer, 0, len(ps.peers))
 	for _, p := range ps.peers {
-		if !p.knownTxs.Has(hash) {
+		if !p.knownTxs.Contains(hash) {
 			list = append(list, p)
 		}
 	}
@@ -582,6 +586,23 @@ func (ps *peerSet) BestPeer(assetId modules.AssetId) *peer {
 	return bestPeer
 }
 
+func (ps *peerSet) StableIndex(assetId modules.AssetId) uint64 {
+	ps.lock.RLock()
+	defer ps.lock.RUnlock()
+
+	var index uint64
+	for _, p := range ps.peers {
+		if stable := p.StableIndex(assetId); stable != nil {
+			if index == 0 {
+				index = stable.Index
+			} else if stable.Index >= 1 && index > stable.Index {
+				index = stable.Index
+			}
+		}
+	}
+	return index
+}
+
 // Close disconnects all peers.
 // No new peers can be registered after Close has returned.
 func (ps *peerSet) Close() {
@@ -591,7 +612,7 @@ func (ps *peerSet) Close() {
 	for _, p := range ps.peers {
 		p.Disconnect(p2p.DiscQuitting)
 	}
-	for id, _ := range ps.peers {
+	for id := range ps.peers {
 		delete(ps.peers, id)
 	}
 	ps.peers = nil

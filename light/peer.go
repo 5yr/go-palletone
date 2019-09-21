@@ -21,18 +21,14 @@ import (
 	"crypto/ecdsa"
 	"errors"
 	"fmt"
-	"math/big"
-	"sync"
-	"time"
-
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/palletone/go-palletone/common"
 	"github.com/palletone/go-palletone/common/log"
 	"github.com/palletone/go-palletone/common/p2p"
 	"github.com/palletone/go-palletone/dag/modules"
 	"github.com/palletone/go-palletone/light/flowcontrol"
-	"github.com/palletone/go-palletone/light/les"
 	"github.com/palletone/go-palletone/ptn"
+	"sync"
 )
 
 var (
@@ -41,11 +37,8 @@ var (
 	errNotRegistered     = errors.New("peer is not registered")
 )
 
-const maxResponseErrors = 50 // number of invalid responses tolerated (makes the protocol less brittle but still avoids spam)
-
 const (
-	announceTypeNone = iota
-	announceTypeSimple
+	announceTypeSimple = iota + 1
 	announceTypeSigned
 )
 
@@ -62,20 +55,24 @@ type peer struct {
 
 	id string
 
-	headInfo *announceData
-	lock     sync.RWMutex
+	//headInfo *announceData
+	//lock     sync.RWMutex
+
+	lightpeermsg map[modules.AssetId]*announceData
+	lightlock    sync.RWMutex
 
 	announceChn chan announceData
 	sendQueue   *execQueue
 
-	poolEntry      *poolEntry
-	hasBlock       func(common.Hash, uint64) bool
-	responseErrors int
+	//poolEntry *poolEntry
+	hasBlock func(common.Hash, uint64) bool
+	//	responseErrors int
 
 	fcClient       *flowcontrol.ClientNode // nil if the peer is server only
 	fcServer       *flowcontrol.ServerNode // nil if the peer is client only
 	fcServerParams *flowcontrol.ServerParams
 	fcCosts        requestCostTable
+	fullnode       bool
 }
 
 func newPeer(version int, network uint64, p *p2p.Peer, rw p2p.MsgReadWriter) *peer {
@@ -83,72 +80,59 @@ func newPeer(version int, network uint64, p *p2p.Peer, rw p2p.MsgReadWriter) *pe
 	pubKey, _ := id.Pubkey()
 
 	return &peer{
-		Peer:        p,
-		pubKey:      pubKey,
-		rw:          rw,
-		version:     version,
-		network:     network,
-		id:          fmt.Sprintf("%x", id[:8]),
-		announceChn: make(chan announceData, 20),
+		Peer:         p,
+		pubKey:       pubKey,
+		rw:           rw,
+		version:      version,
+		network:      network,
+		id:           fmt.Sprintf("%x", id[:8]),
+		announceChn:  make(chan announceData, 20),
+		lightpeermsg: map[modules.AssetId]*announceData{},
 	}
-}
-
-func (p *peer) canQueue() bool {
-	return p.sendQueue.canQueue()
-}
-
-func (p *peer) queueSend(f func()) {
-	p.sendQueue.queue(f)
 }
 
 // Info gathers and returns a collection of metadata known about a peer.
-func (p *peer) Info() *ptn.PeerInfo {
+func (p *peer) Info(assetId modules.AssetId) *ptn.PeerInfo {
+	hash, number := p.HeadAndNumber(assetId)
 	return &ptn.PeerInfo{
 		Version: p.version,
-		Index:   uint64(0),
-		Head:    fmt.Sprintf("%x", p.Head()),
+		Index:   number.Index, //uint64(0),
+		Head:    fmt.Sprintf("%x", hash),
 	}
 }
 
-// Head retrieves a copy of the current head (most recent) hash of the peer.
-func (p *peer) Head() (hash common.Hash) {
-	p.lock.RLock()
-	defer p.lock.RUnlock()
+func (p *peer) SetHead(data *announceData) {
+	p.lightlock.Lock()
+	defer p.lightlock.Unlock()
+	data.Number = *data.Header.Number
+	data.Hash = data.Header.Hash()
+	p.lightpeermsg[data.Number.AssetID] = data
 
-	copy(hash[:], p.headInfo.Hash[:])
+}
+
+// Head retrieves a copy of the current head (most recent) hash of the peer.
+func (p *peer) Head(assetid modules.AssetId) (hash common.Hash) {
+	p.lightlock.RLock()
+	defer p.lightlock.RUnlock()
+	if v, ok := p.lightpeermsg[assetid]; ok {
+		copy(hash[:], v.Hash[:])
+		return hash
+	}
 	return hash
 }
 
-func (p *peer) HeadAndTd() (hash common.Hash, td *big.Int) {
-	p.lock.RLock()
-	defer p.lock.RUnlock()
+func (p *peer) HeadAndNumber(assetid modules.AssetId) (hash common.Hash, number *modules.ChainIndex) {
+	p.lightlock.RLock()
+	defer p.lightlock.RUnlock()
 
-	copy(hash[:], p.headInfo.Hash[:])
-	return hash, &big.Int{}
-	//return hash, p.headInfo.Td
+	if v, ok := p.lightpeermsg[assetid]; ok {
+		copy(hash[:], v.Hash[:])
+		return hash, &v.Number
+	}
+	return hash, nil
 }
 
-func (p *peer) headBlockInfo() blockInfo {
-	p.lock.RLock()
-	defer p.lock.RUnlock()
-
-	return blockInfo{Hash: p.headInfo.Hash, Number: &p.headInfo.Number /*, Td: p.headInfo.Td*/}
-}
-
-// Td retrieves the current total difficulty of a peer.
-//func (p *peer) Td() *big.Int {
-//	p.lock.RLock()
-//	defer p.lock.RUnlock()
-//
-//	return new(big.Int).Set(p.headInfo.Td)
-//}
-
-// waitBefore implements distPeer interface
-func (p *peer) waitBefore(maxCost uint64) (time.Duration, float64) {
-	return p.fcServer.CanSend(maxCost)
-}
-
-func sendRequest(w p2p.MsgWriter, msgcode, reqID, cost uint64, data interface{}) error {
+func sendRequest(w p2p.MsgWriter, msgcode, reqID uint64, data interface{}) error {
 	type req struct {
 		ReqID uint64
 		Data  interface{}
@@ -165,8 +149,8 @@ func sendResponse(w p2p.MsgWriter, msgcode, reqID, bv uint64, data interface{}) 
 }
 
 func (p *peer) GetRequestCost(msgcode uint64, amount int) uint64 {
-	p.lock.RLock()
-	defer p.lock.RUnlock()
+	p.lightlock.RLock()
+	defer p.lightlock.RUnlock()
 
 	cost := p.fcCosts[msgcode].baseCost + p.fcCosts[msgcode].reqCost*uint64(amount)
 	if cost > p.fcServerParams.BufLimit {
@@ -177,143 +161,70 @@ func (p *peer) GetRequestCost(msgcode uint64, amount int) uint64 {
 
 // HasBlock checks if the peer has a given block
 func (p *peer) HasBlock(hash common.Hash, number uint64) bool {
-	p.lock.RLock()
+	p.lightlock.RLock()
+	defer p.lightlock.RUnlock()
 	hasBlock := p.hasBlock
-	p.lock.RUnlock()
 	return hasBlock != nil && hasBlock(hash, number)
 }
 
-// SendAnnounce announces the availability of a number of blocks through
-// a hash notification.
-//func (p *peer) SendAnnounce(request announceData) error {
-//	return p2p.Send(p.rw, AnnounceMsg, request)
-//}
 func (p *peer) SendRawAnnounce(request []byte /*announceData*/) error {
 	return p2p.Send(p.rw, AnnounceMsg, request)
 }
 
 // SendBlockHeaders sends a batch of block headers to the remote peer.
-func (p *peer) SendBlockHeaders(reqID, bv uint64, headers []*modules.Header) error {
+func (p *peer) SendUnitHeaders(reqID, bv uint64, headers []*modules.Header) error {
 	return sendResponse(p.rw, BlockHeadersMsg, reqID, bv, headers)
 }
 
-// SendBlockBodiesRLP sends a batch of block contents to the remote peer from
-// an already RLP encoded format.
-func (p *peer) SendBlockBodiesRLP(reqID, bv uint64, bodies []rlp.RawValue) error {
-	return sendResponse(p.rw, BlockBodiesMsg, reqID, bv, bodies)
+func (p *peer) SendLeafNodes(reqID, bv uint64, headers []*modules.Header) error {
+	return sendResponse(p.rw, LeafNodesMsg, reqID, bv, headers)
 }
 
-// SendCodeRLP sends a batch of arbitrary internal data, corresponding to the
-// hashes requested.
-func (p *peer) SendCode(reqID, bv uint64, data [][]byte) error {
-	return sendResponse(p.rw, CodeMsg, reqID, bv, data)
-}
-
-// SendReceiptsRLP sends a batch of transaction receipts, corresponding to the
-// ones requested from an already RLP encoded format.
-func (p *peer) SendReceiptsRLP(reqID, bv uint64, receipts []rlp.RawValue) error {
-	return sendResponse(p.rw, ReceiptsMsg, reqID, bv, receipts)
+func (p *peer) SendRawUTXOs(reqID, bv uint64, utxos [][][]byte) error {
+	return p2p.Send(p.rw, UTXOsMsg, utxos)
 }
 
 // SendProofs sends a batch of legacy LES/1 merkle proofs, corresponding to the ones requested.
-func (p *peer) SendProofs(reqID, bv uint64, proofs proofsData) error {
-	return sendResponse(p.rw, ProofsV1Msg, reqID, bv, proofs)
+func (p *peer) SendRawProofs(reqID, bv uint64, proofs [][][]byte) error {
+	//log.Debug("Light PalleOne SendProofs", "len", len(proofs))
+	return p2p.Send(p.rw, ProofsMsg, proofs)
+	//return sendResponse(p.rw, ProofsV1Msg, reqID, bv, proofs)
 }
-
-// SendProofsV2 sends a batch of merkle proofs, corresponding to the ones requested.
-func (p *peer) SendProofsV2(reqID, bv uint64, proofs les.NodeList) error {
-	return sendResponse(p.rw, ProofsV2Msg, reqID, bv, proofs)
+func (p *peer) SendProofs(reqID, bv uint64, proof proofsRespData) error {
+	//log.Debug("Light PalleOne SendProofs", "len", len(proofs))
+	return p2p.Send(p.rw, ProofsMsg, proof)
+	//return sendResponse(p.rw, ProofsV1Msg, reqID, bv, proofs)
 }
-
-// SendHeaderProofs sends a batch of legacy LES/1 header proofs, corresponding to the ones requested.
-//func (p *peer) SendHeaderProofs(reqID, bv uint64, proofs []ChtResp) error {
-//	return sendResponse(p.rw, HeaderProofsMsg, reqID, bv, proofs)
-//}
-//
-//// SendHelperTrieProofs sends a batch of HelperTrie proofs, corresponding to the ones requested.
-//func (p *peer) SendHelperTrieProofs(reqID, bv uint64, resp HelperTrieResps) error {
-//	return sendResponse(p.rw, HelperTrieProofsMsg, reqID, bv, resp)
-//}
-
-// SendTxStatus sends a batch of transaction status records, corresponding to the ones requested.
-//func (p *peer) SendTxStatus(reqID, bv uint64, stats []txStatus) error {
-//	return sendResponse(p.rw, TxStatusMsg, reqID, bv, stats)
-//}
 
 // RequestHeadersByHash fetches a batch of blocks' headers corresponding to the
 // specified header query, based on the hash of an origin block.
 func (p *peer) RequestHeadersByHash(reqID, cost uint64, origin common.Hash, amount int, skip int, reverse bool) error {
-	log.Debug("Fetching batch of headers", "count", amount, "fromhash", origin, "skip", skip, "reverse", reverse)
-	return sendRequest(p.rw, GetBlockHeadersMsg, reqID, cost, &getBlockHeadersData{Origin: hashOrNumber{Hash: origin}, Amount: uint64(amount), Skip: uint64(skip), Reverse: reverse})
+	log.Debug("Fetching batch of headers", "count", amount, "fromhash", origin, "skip", skip,
+		"reverse", reverse, "cost", cost)
+	return sendRequest(p.rw, GetBlockHeadersMsg, reqID, &getBlockHeadersData{Origin: hashOrNumber{Hash: origin},
+		Amount: uint64(amount), Skip: uint64(skip), Reverse: reverse})
 }
 
 // RequestHeadersByNumber fetches a batch of blocks' headers corresponding to the
 // specified header query, based on the number of an origin block.
-func (p *peer) RequestHeadersByNumber(reqID, cost, origin uint64, amount int, skip int, reverse bool) error {
-	log.Debug("Fetching batch of headers", "count", amount, "fromnum", origin, "skip", skip, "reverse", reverse)
-	return sendRequest(p.rw, GetBlockHeadersMsg, reqID, cost, &getBlockHeadersData{Origin: hashOrNumber{Number: origin}, Amount: uint64(amount), Skip: uint64(skip), Reverse: reverse})
+func (p *peer) RequestHeadersByNumber(reqID, cost uint64, origin modules.ChainIndex, amount int, skip int,
+	reverse bool) error {
+	log.Debug("Fetching batch of headers", "count", amount, "fromnum", origin, "skip", skip,
+		"reverse", reverse, "cost", cost)
+	//return nil
+	return sendRequest(p.rw, GetBlockHeadersMsg, reqID, &getBlockHeadersData{Origin: hashOrNumber{Number: origin},
+		Amount: uint64(amount), Skip: uint64(skip), Reverse: reverse})
 }
 
-// RequestBodies fetches a batch of blocks' bodies corresponding to the hashes
-// specified.
-func (p *peer) RequestBodies(reqID, cost uint64, hashes []common.Hash) error {
-	log.Debug("Fetching batch of block bodies", "count", len(hashes))
-	return sendRequest(p.rw, GetBlockBodiesMsg, reqID, cost, hashes)
-}
-
-// RequestCode fetches a batch of arbitrary data from a node's known state
-// data, corresponding to the specified hashes.
-//func (p *peer) RequestCode(reqID, cost uint64, reqs []CodeReq) error {
-//	log.Debug("Fetching batch of codes", "count", len(reqs))
-//	return sendRequest(p.rw, GetCodeMsg, reqID, cost, reqs)
-//}
-
-// RequestReceipts fetches a batch of transaction receipts from a remote node.
-func (p *peer) RequestReceipts(reqID, cost uint64, hashes []common.Hash) error {
-	log.Debug("Fetching batch of receipts", "count", len(hashes))
-	return sendRequest(p.rw, GetReceiptsMsg, reqID, cost, hashes)
+func (p *peer) RequestUTXOs(reqID, cost uint64, addr string) error {
+	log.Debug("Fetching batch of utxos", "addr", addr)
+	return p2p.Send(p.rw, GetUTXOsMsg, addr)
 }
 
 // RequestProofs fetches a batch of merkle proofs from a remote node.
 func (p *peer) RequestProofs(reqID, cost uint64, reqs []ProofReq) error {
 	log.Debug("Fetching batch of proofs", "count", len(reqs))
-	switch p.version {
-	case lpv1:
-		return sendRequest(p.rw, GetProofsV1Msg, reqID, cost, reqs)
-	case lpv2:
-		return sendRequest(p.rw, GetProofsV2Msg, reqID, cost, reqs)
-	default:
-		panic(nil)
-	}
-}
-
-// RequestHelperTrieProofs fetches a batch of HelperTrie merkle proofs from a remote node.
-func (p *peer) RequestHelperTrieProofs(reqID, cost uint64, reqs []HelperTrieReq) error {
-	log.Debug("Fetching batch of HelperTrie proofs", "count", len(reqs))
-	return nil
-	//switch p.version {
-	//case lpv1:
-	//	reqsV1 := make([]ChtReq, len(reqs))
-	//	for i, req := range reqs {
-	//		if req.Type != htCanonical || req.AuxReq != auxHeader || len(req.Key) != 8 {
-	//			return fmt.Errorf("Request invalid in LES/1 mode")
-	//		}
-	//		blockNum := binary.BigEndian.Uint64(req.Key)
-	//		// convert HelperTrie request to old CHT request
-	//		reqsV1[i] = ChtReq{ChtNum: (req.TrieIdx + 1) * (light.CHTFrequencyClient / light.CHTFrequencyServer), BlockNum: blockNum, FromLevel: req.FromLevel}
-	//	}
-	//	return sendRequest(p.rw, GetHeaderProofsMsg, reqID, cost, reqsV1)
-	//case lpv2:
-	//	return sendRequest(p.rw, GetHelperTrieProofsMsg, reqID, cost, reqs)
-	//default:
-	//	panic(nil)
-	//}
-}
-
-// RequestTxStatus fetches a batch of transaction status records from a remote node.
-func (p *peer) RequestTxStatus(reqID, cost uint64, txHashes []common.Hash) error {
-	log.Debug("Requesting transaction status", "count", len(txHashes))
-	return sendRequest(p.rw, GetTxStatusMsg, reqID, cost, txHashes)
+	return p2p.Send(p.rw, GetProofsMsg, reqs)
 }
 
 // SendTxStatus sends a batch of transactions to be added to the remote transaction pool.
@@ -322,8 +233,8 @@ func (p *peer) SendTxs(reqID, cost uint64, txs modules.Transactions) error {
 	switch p.version {
 	case lpv1:
 		return p2p.Send(p.rw, SendTxMsg, txs) // old message format does not include reqID
-	case lpv2:
-		return sendRequest(p.rw, SendTxV2Msg, reqID, cost, txs)
+	//case lpv2:
+	//return sendRequest(p.rw, SendTxV2Msg, reqID, cost, txs)
 	default:
 		panic(nil)
 	}
@@ -398,9 +309,10 @@ func (p *peer) sendReceiveHandshake(sendList keyValueList) (keyValueList, error)
 
 // Handshake executes the les protocol handshake, negotiating version number,
 // network IDs, difficulties, head and genesis blocks.
-func (p *peer) Handshake(number *modules.ChainIndex, genesis common.Hash, server *LesServer, headhash common.Hash) error {
-	p.lock.Lock()
-	defer p.lock.Unlock()
+func (p *peer) Handshake(number *modules.ChainIndex, genesis common.Hash, server *LesServer, headhash common.Hash,
+	assetids [][][]byte) error {
+	p.lightlock.Lock()
+	defer p.lightlock.Unlock()
 
 	var send keyValueList
 	send = send.add("protocolVersion", uint64(p.version))
@@ -408,6 +320,7 @@ func (p *peer) Handshake(number *modules.ChainIndex, genesis common.Hash, server
 	send = send.add("headNum", *number)
 	send = send.add("headHash", headhash)
 	send = send.add("genesisHash", genesis)
+	send = send.add("assetids", assetids)
 
 	if server != nil {
 		send = send.add("serveHeaders", nil)
@@ -416,9 +329,10 @@ func (p *peer) Handshake(number *modules.ChainIndex, genesis common.Hash, server
 		send = send.add("txRelay", nil)
 		send = send.add("flowControl/BL", server.defParams.BufLimit)
 		send = send.add("flowControl/MRR", server.defParams.MinRecharge)
-		list := server.fcCostStats.getCurrentList()
-		send = send.add("flowControl/MRC", list)
-		p.fcCosts = list.decode()
+		//list := server.fcCostStats.getCurrentList()
+		//send = send.add("flowControl/MRC", list)
+		send = send.add("fullnode", nil)
+		//p.fcCosts = list.decode()
 	} else {
 		p.requestAnnounceType = announceTypeSimple // set to default until "very light" client mode is implemented
 		send = send.add("announceType", p.requestAnnounceType)
@@ -440,9 +354,6 @@ func (p *peer) Handshake(number *modules.ChainIndex, genesis common.Hash, server
 	if err := recv.get("networkId", &rNetwork); err != nil {
 		return err
 	}
-	//if err := recv.get("headTd", &rTd); err != nil {
-	//	return err
-	//}
 	if err := recv.get("headHash", &rHash); err != nil {
 		return err
 	}
@@ -467,7 +378,7 @@ func (p *peer) Handshake(number *modules.ChainIndex, genesis common.Hash, server
 		//if recv.get("serveStateSince", nil) == nil {
 		//	return errResp(ErrUselessPeer, "wanted client, got server")
 		//}
-		if recv.get("announceType", &p.announceType) == nil {
+		if recv.get("announceType", &p.announceType) != nil {
 			p.announceType = announceTypeSimple
 		}
 		p.fcClient = flowcontrol.NewClientNode(server.fcManager, server.defParams)
@@ -488,17 +399,33 @@ func (p *peer) Handshake(number *modules.ChainIndex, genesis common.Hash, server
 		if err := recv.get("flowControl/MRR", &params.MinRecharge); err != nil {
 			return err
 		}
-		var MRC RequestCostList
-		if err := recv.get("flowControl/MRC", &MRC); err != nil {
-			return err
-		}
+		//var MRC RequestCostList
+		//if err := recv.get("flowControl/MRC", &MRC); err != nil {
+		//	return err
+		//}
 		p.fcServerParams = params
 		p.fcServer = flowcontrol.NewServerNode(params)
-		p.fcCosts = MRC.decode()
+		//p.fcCosts = MRC.decode()
 	}
-	log.Debug("Light Palletone peer->Handshake", "p.announceType", p.announceType)
-	//TODO must modify
-	p.headInfo = &announceData{ /*Td: rTd,*/ Hash: rHash, Number: rNum}
+
+	if err := recv.get("fullnode", nil); err != nil {
+		p.fullnode = false
+	} else {
+		p.fullnode = true
+	}
+	var rAssetIds [][][]byte
+	if err := recv.get("assetids", &rAssetIds); err != nil {
+		return err
+	}
+	for _, data := range rAssetIds {
+		var hash common.Hash
+		var number modules.ChainIndex
+		hash.SetBytes(data[0])
+		number.SetBytes(data[1])
+		log.Debug("Light PalletOne Handshake all assetids", "assetid", number.AssetID, "index", number.Index)
+		p.lightpeermsg[number.AssetID] = &announceData{Hash: hash, Number: number}
+	}
+	p.lightpeermsg[rNum.AssetID] = &announceData{Hash: rHash, Number: rNum}
 	return nil
 }
 
@@ -624,7 +551,7 @@ func (ps *peerSet) Len() int {
 }
 
 // BestPeer retrieves the known peer with the currently highest total difficulty.
-func (ps *peerSet) BestPeer() *peer {
+func (ps *peerSet) BestPeer(assetid modules.AssetId) *peer {
 	ps.lock.RLock()
 	defer ps.lock.RUnlock()
 
@@ -633,23 +560,44 @@ func (ps *peerSet) BestPeer() *peer {
 		bestTd   uint64
 	)
 	for _, p := range ps.peers {
-		if number := p.headInfo.Number; bestPeer == nil || number.Index > bestTd {
-			bestPeer, bestTd = p, number.Index
+		p.lightlock.RLock()
+		defer p.lightlock.RUnlock()
+		if v, ok := p.lightpeermsg[assetid]; ok {
+			if number := v.Number; bestPeer == nil || number.Index > bestTd {
+				bestPeer, bestTd = p, number.Index
+			}
 		}
 	}
 	return bestPeer
 }
 
 // AllPeers returns all peers in a list
-func (ps *peerSet) AllPeers() []*peer {
+func (ps *peerSet) AllPeers(assetid modules.AssetId) []*peer {
+	ps.lock.RLock()
+	defer ps.lock.RUnlock()
+
+	list := []*peer{}
+	for _, peer := range ps.peers {
+		peer.lightlock.RLock()
+		defer peer.lightlock.RUnlock()
+		if _, ok := peer.lightpeermsg[assetid]; ok {
+			list = append(list, peer)
+		}
+	}
+	return list
+}
+
+func (ps *peerSet) PeersWithoutHeader(assetid modules.AssetId, hash common.Hash) []*peer {
 	ps.lock.RLock()
 	defer ps.lock.RUnlock()
 
 	list := make([]*peer, len(ps.peers))
 	i := 0
 	for _, peer := range ps.peers {
-		list[i] = peer
-		i++
+		if peer.Head(assetid).String() != hash.String() {
+			list[i] = peer
+			i++
+		}
 	}
 	return list
 }

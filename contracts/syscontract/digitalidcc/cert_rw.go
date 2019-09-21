@@ -163,6 +163,12 @@ func queryNonce(prefixSymbol string, issuer string, stub shim.ChaincodeStubInter
 }
 
 func GetCertBytes(certid string, stub shim.ChaincodeStubInterface) (certBytes []byte, err error) {
+	cacert, err := GetRootCACert(stub)
+	if err == nil {
+		if cacert.SerialNumber.String() == certid {
+			return cacert.Raw, nil
+		}
+	}
 	key := dagConstants.CERT_BYTES_SYMBOL + certid
 	data, err := stub.GetState(key)
 	if err != nil { // query none
@@ -200,14 +206,14 @@ func GetCertDBInfo(certid string, stub shim.ChaincodeStubInterface) (certDBInfo 
 	if err := json.Unmarshal(data, certDBInfo); err != nil {
 		return nil, err
 	}
-	if err != nil {
-		return nil, err
-	}
+	//if err != nil {
+	//	return nil, err
+	//}
 	return certDBInfo, nil
 }
 
 func setCRL(issuer string, crl *pkix.CertificateList, certHolderInfo []*dagModules.CertHolderInfo, stub shim.ChaincodeStubInterface) error {
-	var symbol string = ""
+	var symbol string
 	for index, revokeCert := range crl.TBSCertList.RevokedCertificates {
 		t, err := revokeCert.RevocationTime.MarshalBinary()
 		if err != nil {
@@ -323,7 +329,7 @@ func GetCertRevocationTime(holder string, certid string, stub shim.ChaincodeStub
 	return revocationtime, nil
 }
 
-func GetRootCert(stub shim.ChaincodeStubInterface) (cert *x509.Certificate, err error) {
+func GetRootCACert(stub shim.ChaincodeStubInterface) (cert *x509.Certificate, err error) {
 	val, err := stub.GetState("RootCABytes")
 	if err != nil {
 		return nil, err

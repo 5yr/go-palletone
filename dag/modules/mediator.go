@@ -25,25 +25,39 @@ import (
 	"github.com/palletone/go-palletone/core"
 )
 
-// only for serialization(storage)
+const (
+	ApplyMediator      = "ApplyBecomeMediator"
+	IsApproved         = "IsInAgreeList"
+	MediatorPayDeposit = "MediatorPayToDepositContract"
+	MediatorList       = "MediatorList"
+	GetMediatorDeposit = "GetMediatorDeposit"
+	MediatorApplyQuit  = "MediatorApplyQuit"
+	UpdateMediatorInfo = "UpdateMediatorInfo"
+)
+
+// mediator 信息
 type MediatorInfo struct {
 	*core.MediatorInfoBase
+	*core.MediatorApplyInfo
 	*core.MediatorInfoExpand
 }
 
 func NewMediatorInfo() *MediatorInfo {
 	return &MediatorInfo{
 		MediatorInfoBase:   core.NewMediatorInfoBase(),
-		MediatorInfoExpand: core.NewMediatorBase(),
+		MediatorApplyInfo:  core.NewMediatorApplyInfo(),
+		MediatorInfoExpand: core.NewMediatorInfoExpand(),
 	}
 }
 
 func MediatorToInfo(md *core.Mediator) *MediatorInfo {
 	mi := NewMediatorInfo()
 	mi.AddStr = md.Address.Str()
+	mi.RewardAdd = md.RewardAdd.Str()
 	mi.InitPubKey = core.PointToStr(md.InitPubKey)
 	mi.Node = md.Node.String()
-	mi.MediatorInfoExpand = md.MediatorInfoExpand
+	*mi.MediatorApplyInfo = *md.MediatorApplyInfo
+	*mi.MediatorInfoExpand = *md.MediatorInfoExpand
 
 	return mi
 }
@@ -51,44 +65,72 @@ func MediatorToInfo(md *core.Mediator) *MediatorInfo {
 func (mi *MediatorInfo) InfoToMediator() *core.Mediator {
 	md := core.NewMediator()
 	md.Address, _ = core.StrToMedAdd(mi.AddStr)
+	md.RewardAdd, _ = core.StrToMedAdd(mi.RewardAdd)
 	md.InitPubKey, _ = core.StrToPoint(mi.InitPubKey)
 	md.Node, _ = core.StrToMedNode(mi.Node)
-	md.MediatorInfoExpand = mi.MediatorInfoExpand
+	*md.MediatorApplyInfo = *mi.MediatorApplyInfo
+	*md.MediatorInfoExpand = *mi.MediatorInfoExpand
 
 	return md
 }
 
-type MediatorCreateOperation struct {
+// 创建 mediator 所需的参数
+type MediatorCreateArgs struct {
 	*core.MediatorInfoBase
-	Url string `json:"url"`
+	*core.MediatorApplyInfo
 }
 
-func (mco *MediatorCreateOperation) FeePayer() common.Address {
-	addr, _ := common.StringToAddress(mco.AddStr)
-
-	return addr
+func NewMediatorCreateArgs() *MediatorCreateArgs {
+	return &MediatorCreateArgs{
+		MediatorInfoBase:  core.NewMediatorInfoBase(),
+		MediatorApplyInfo: core.NewMediatorApplyInfo(),
+	}
 }
 
-func (mco *MediatorCreateOperation) Validate() error {
-	_, err := core.StrToMedAdd(mco.AddStr)
+// 更新 mediator 信息所需参数
+type MediatorUpdateArgs struct {
+	AddStr      string  `json:"account"`              // 要更新的mediator地址
+	RewardAdd   *string `json:"rewardAdd" rlp:"nil"`  // mediator奖励地址，主要用于接收产块奖励
+	InitPubKey  *string `json:"initPubKey" rlp:"nil"` // mediator的群签名初始公钥
+	Node        *string `json:"node" rlp:"nil"`       // 节点网络信息，包括ip和端口等
+	Logo        *string `json:"logo" rlp:"nil"`       // 节点图标url
+	Name        *string `json:"name" rlp:"nil"`       // 节点名称
+	Location    *string `json:"loc" rlp:"nil"`        // 节点所在地区
+	Url         *string `json:"url" rlp:"nil"`        // 节点宣传网站
+	Description *string `json:"applyInfo" rlp:"nil"`  // 节点详细信息描述
+}
+
+func (mua *MediatorUpdateArgs) Validate() (common.Address, error) {
+	addr, err := core.StrToMedAdd(mua.AddStr)
 	if err != nil {
-		return err
+		return addr, err
 	}
 
-	_, err = core.StrToPoint(mco.InitPubKey)
-	if err != nil {
-		return err
+	if mua.RewardAdd != nil {
+		_, err := core.StrToMedAdd(*mua.RewardAdd)
+		if err != nil {
+			return addr, err
+		}
 	}
 
-	node, err := core.StrToMedNode(mco.Node)
-	if err != nil {
-		return err
+	if mua.InitPubKey != nil {
+		_, err = core.StrToPoint(*mua.InitPubKey)
+		if err != nil {
+			return addr, err
+		}
 	}
 
-	err = node.ValidateComplete()
-	if err != nil {
-		return err
+	if mua.Node != nil {
+		node, err := core.StrToMedNode(*mua.Node)
+		if err != nil {
+			return addr, err
+		}
+
+		err = node.ValidateComplete()
+		if err != nil {
+			return addr, err
+		}
 	}
 
-	return nil
+	return addr, nil
 }

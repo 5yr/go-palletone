@@ -21,149 +21,87 @@
 package dag
 
 import (
+	"encoding/json"
+	"fmt"
+	"github.com/ethereum/go-ethereum/rlp"
 	"time"
 
 	"github.com/palletone/go-palletone/common"
 	"github.com/palletone/go-palletone/common/log"
 	"github.com/palletone/go-palletone/core/accounts/keystore"
-	// "github.com/palletone/go-palletone/core/types"
 	dagcommon "github.com/palletone/go-palletone/dag/common"
-	"github.com/palletone/go-palletone/dag/dagconfig"
 	"github.com/palletone/go-palletone/dag/modules"
 	"github.com/palletone/go-palletone/dag/txspool"
 )
 
 // GenerateUnit, generate unit
 // @author Albert·Gou
-func (dag *Dag) GenerateUnit(when time.Time, producer common.Address, groupPubKey []byte,
-	ks *keystore.KeyStore, txpool txspool.ITxPool) *modules.Unit {
+func (dag *Dag) GenerateUnit(when time.Time, producer common.Address, groupPubKey []byte, ks *keystore.KeyStore,
+	txpool txspool.ITxPool) (*modules.Unit, error) {
 	t0 := time.Now()
 	defer func(start time.Time) {
 		log.Debugf("GenerateUnit cost time: %v", time.Since(start))
 	}(t0)
 
-	gasToken := dagconfig.DagConfig.GetGasToken()
-
 	// 1. 判断是否满足生产的若干条件
 
-	//检查NewestUnit是否存在，不存在则从MemDag获取最新的Unit作为NewestUnit
-	// todo 应当在其他地方其他时刻更新该值
-	hash, chainIndex, _ := dag.propRep.GetNewestUnit(gasToken)
-	if !dag.IsHeaderExist(hash) {
-		log.Debugf("Newest unit[%s] not exist in dag, retrieve another from memdag "+
-			"and update NewestUnit.index [%d]", hash.String(), chainIndex.Index)
-		newestUnit := dag.Memdag.GetLastMainchainUnit(gasToken)
-		if nil != newestUnit {
-			dag.propRep.SetNewestUnit(newestUnit.Header())
-		}
-	}
-
 	// 2. 生产unit，添加交易集、时间戳、签名
-	newUnit, err := dag.CreateUnit(&producer, txpool, when)
+	newUnit, err := dag.CreateUnit(producer, txpool, when)
 	if err != nil {
-		log.Debug("GenerateUnit", "error", err.Error())
-		return nil
+		errStr := fmt.Sprintf("GenerateUnit error: %v", err.Error())
+		log.Debug(errStr)
+		return nil, fmt.Errorf(errStr)
 	}
 	// added by yangyu, 2018.8.9
 	if newUnit == nil || newUnit.IsEmpty() {
-		log.Info("No unit need to be packaged for now.", "unit", newUnit)
-		return nil
+		errStr := fmt.Sprintf("No unit need to be packaged for now.")
+		log.Debug(errStr)
+		//log.Info("No unit need to be packaged for now.", "unit", newUnit)
+		return nil, fmt.Errorf(errStr)
 	}
 
 	newUnit.UnitHeader.Time = when.Unix()
-	newUnit.UnitHeader.ParentsHash[0] = dag.HeadUnitHash()
-	newUnit.UnitHeader.Number.Index = dag.HeadUnitNum() + 1
 	newUnit.UnitHeader.GroupPubKey = groupPubKey
 	newUnit.Hash()
 
-	sign_unit, err1 := dagcommon.GetUnitWithSig(newUnit, ks, producer)
-	if err1 != nil {
-		log.Debugf("GetUnitWithSig error: %v", err)
-		return nil
+	sign_unit, err := dagcommon.GetUnitWithSig(newUnit, ks, producer)
+	if err != nil {
+		errStr := fmt.Sprintf("GetUnitWithSig error: %v", err.Error())
+		log.Debug(errStr)
+		return nil, fmt.Errorf(errStr)
 	}
 
 	sign_unit.UnitSize = sign_unit.Size()
-	log.Debugf("Generate new unit index:[%d],hash:[%s],size:%s, parent unit[%s], spent time: %s",
+	log.Infof("Generate new unit index:[%d],hash:[%s],size:%s, parent unit[%s],txs[%d], spent time: %s",
 		sign_unit.NumberU64(), sign_unit.Hash().String(), sign_unit.UnitSize.String(),
-		newUnit.UnitHeader.ParentsHash[0].String(), time.Since(t0).String())
+		sign_unit.UnitHeader.ParentsHash[0].String(), sign_unit.Txs.Len(), time.Since(t0).String())
 
+	//3.将新单元添加到MemDag中
+	a, b, c, d, e, err := dag.Memdag.AddUnit(sign_unit, txpool, true)
+	if a != nil && err == nil {
+		dag.unstableUnitRep = a
+		dag.unstableUtxoRep = b
+		dag.unstableStateRep = c
+		dag.unstablePropRep = d
+		dag.unstableUnitProduceRep = e
+	} else if err != nil {
+		errStr := fmt.Sprintf("Memdag AddUnit[%s] error: %v", sign_unit.Hash().String(), err.Error())
+		udata, _ := json.Marshal(sign_unit)
+		rdata, _ := rlp.EncodeToBytes(sign_unit)
+		log.Errorf("%s, Unit data:%s,Rlp:%x", errStr, string(udata), rdata)
+		return nil, fmt.Errorf(errStr)
+	}
+	sign_unit.ReceivedAt = time.Now()
+	//4.PostChainEvents
 	//TODO add PostChainEvents
 	go func() {
 		var (
-			events = make([]interface{}, 0, 1)
+			events = make([]interface{}, 0, 2)
 		)
-		events = append(events, modules.ChainHeadEvent{newUnit})
+		events = append(events, modules.ChainHeadEvent{Unit: sign_unit})
+		events = append(events, modules.ChainEvent{Unit: sign_unit, Hash: sign_unit.UnitHash})
 		dag.PostChainEvents(events)
 	}()
 
-	if !dag.PushUnit(sign_unit, txpool) {
-		return nil
-	}
-
-	return sign_unit
-}
-
-/**
- * Push unit "may fail" in which case every partial change is unwound.  After
- * push unit is successful the block is appended to the chain database on disk.
- *
- * 推块“可能会失败”，在这种情况下，每个部分地更改都会撤销。 推块成功后，该块将附加到磁盘上的链数据库。
- *
- * @return true if we switched forks as a result of this push.
- */
-func (dag *Dag) PushUnit(newUnit *modules.Unit, txpool txspool.ITxPool) bool {
-	t0 := time.Now()
-	// 1. 如果当前初生产的unit不在最长链条上，那么就切换到最长链分叉上。
-
-	// 2. 更新状态
-	if !dag.ApplyUnit(newUnit) {
-		return false
-	}
-
-	dag.Memdag.AddUnit(newUnit, txpool)
-	log.Debugf("save newest unit spent time: %s, index: %d , hash:%s", time.Since(t0).String(), newUnit.NumberU64(), newUnit.UnitHash.String())
-	return true
-}
-
-// ApplyUnit, 运用下一个 unit 更新整个区块链状态
-func (dag *Dag) ApplyUnit(nextUnit *modules.Unit) bool {
-	defer func(start time.Time) {
-		log.Debugf("ApplyUnit cost time: %v", time.Since(start))
-	}(time.Now())
-
-	dag.applyLock.Lock()
-	defer dag.applyLock.Unlock()
-
-	// 1. 下一个 unit 和本地 unit 连续性的判断
-	if !dag.validateUnitHeader(nextUnit) {
-		return false
-	}
-
-	// 2. 验证 unit 的 mediator 调度
-	if !dag.validateMediatorSchedule(nextUnit) {
-		return false
-	}
-
-	// todo 5. 运用Unit中的交易
-
-	// 3. 计算当前 unit 到上一个 unit 之间的缺失数量，并更新每个mediator的unit的缺失数量
-	missed := dag.updateMediatorMissedUnits(nextUnit)
-
-	// 4. 更新全局动态属性值
-	dag.updateDynGlobalProp(nextUnit, missed)
-	dag.propRep.SetNewestUnit(nextUnit.Header())
-
-	// 5. 更新 mediator 的相关数据
-	dag.updateSigningMediator(nextUnit)
-
-	// 6. 更新最新不可逆区块高度
-	dag.updateLastIrreversibleUnit()
-
-	// 7. 判断是否到了维护周期，并维护
-	dag.performChainMaintenance(nextUnit)
-
-	// 8. 洗牌
-	dag.updateMediatorSchedule()
-
-	return true
+	return sign_unit, nil
 }

@@ -21,12 +21,13 @@
 package common
 
 import (
+	"encoding/json"
 	"github.com/stretchr/testify/assert"
 	"testing"
 )
 
 func TestAddressValidate(t *testing.T) {
-	p2pkh := "P1Kp2hcLhGEP45Xgx7vmSrE37QXunJUd8gJ"
+	p2pkh := "P1C6rpwKHrCxUiJyi7X5E4yP5o6aq3tTBSs"
 	addr, err := StringToAddress(p2pkh)
 
 	if err != nil {
@@ -34,6 +35,7 @@ func TestAddressValidate(t *testing.T) {
 	}
 	t.Log(addr)
 }
+
 func TestAddressNotValidate(t *testing.T) {
 	p2pkh := "P1Kp2hcLhGEP45Xgx7vmSrE37QXunJUd8gj"
 	addr, err := StringToAddress(p2pkh)
@@ -47,7 +49,8 @@ func TestAddressNotValidate(t *testing.T) {
 
 }
 func TestHexToAddrString(t *testing.T) {
-
+	adds := HexToAddress("0x00000000000000000000000000000000000095271C")
+	t.Logf("Test %s", adds.String())
 	addr := HexToAddress("0x00000000000000000000000000000000000000011C")
 	t.Logf("0x1 contract address: %s", addr.String()) //PCGTta3M4t3yXu8uRgkKvaWd2d8DR32W9vM
 	t.Logf("Is system contract:%t", addr.IsSystemContractAddress())
@@ -62,12 +65,15 @@ func TestHexToAddrString(t *testing.T) {
 	addr = HexToAddress("0x00000000000000000000000000000000000000041C")
 	t.Logf("0x4 contract address: %s", addr.String()) //PCGTta3M4t3yXu8uRgkKvaWd2d8DRS71ZEM
 	t.Logf("Is system contract:%t", addr.IsSystemContractAddress())
-
+	addr = HexToAddress("0x00000000000000000000000000000000000000051C")
+	t.Logf("0x5 contract address: %s", addr.String()) //
+	addr = HexToAddress("0x00000000000000000000000000000000000000061C")
+	t.Logf("0x6 contract address: %s", addr.String()) //
 	addr = HexToAddress("0x00000000000000000000000000000000000000081C")
 	t.Logf("0x8 contract address: %s", addr.String()) //PCGTta3M4t3yXu8uRgkKvaWd2d8DRv2vsEk
 	t.Logf("Is system contract:%t", addr.IsSystemContractAddress())
 
-	addr = HexToAddress("0x00000000000000000000000000000000000095271C")
+	addr = HexToAddress("0x00000000000000000000000000000000000000091C")
 	t.Logf("0x9 contract address: %s", addr.String()) //PCGTta3M4t3yXu8uRgkKvaWd2d9Vgsc4zGX
 	t.Logf("Is system contract:%t", addr.IsSystemContractAddress())
 
@@ -114,4 +120,37 @@ func TestAddrValidate(t *testing.T) {
 	if addr.Less(raddr) {
 		t.Fail()
 	}
+}
+func TestAddresses_MarshalJson(t *testing.T) {
+	addr1, _ := StringToAddress("P124gB1bXHDTXmox58g4hd4u13HV3e5vKie")
+	addr1Json, _ := json.Marshal(addr1)
+	t.Log(string(addr1Json))
+	addr11 := Address{}
+	err := json.Unmarshal(addr1Json, &addr11)
+	assert.Nil(t, err)
+	t.Log(addr11.String())
+	addr2, _ := StringToAddress("P1LWaK3KBCuPVsXUPHXkMZr2Cm5tZquRDK8")
+	addrList := []Address{addr1, addr2}
+	addrListStr, _ := json.Marshal(addrList)
+	t.Log(string(addrListStr))
+}
+
+func TestAddressIsMapKey(t *testing.T) {
+	addr1, _ := StringToAddress("P124gB1bXHDTXmox58g4hd4u13HV3e5vKie")
+	addr2, _ := StringToAddress("P1LWaK3KBCuPVsXUPHXkMZr2Cm5tZquRDK8")
+	m := make(map[Address]bool)
+	m[addr1] = true
+	m[addr2] = false
+	data, err := json.Marshal(m)
+	assert.Nil(t, err)
+	t.Log(string(data))
+
+	m2 := make(map[Address]bool)
+	err = json.Unmarshal(data, &m2)
+	assert.Nil(t, err)
+	t.Logf("%#v", m2)
+}
+func TestAddressToHex(t *testing.T) {
+	addr1, _ := StringToAddress("P124gB1bXHDTXmox58g4hd4u13HV3e5vKie")
+	t.Logf("%#x", addr1.Bytes())
 }

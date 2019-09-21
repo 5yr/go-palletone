@@ -22,6 +22,7 @@ package memunit
 
 import (
 	"github.com/palletone/go-palletone/common"
+	"github.com/palletone/go-palletone/common/event"
 	common2 "github.com/palletone/go-palletone/dag/common"
 	"github.com/palletone/go-palletone/dag/modules"
 	"github.com/palletone/go-palletone/dag/txspool"
@@ -41,12 +42,21 @@ import (
 // 	GetDelhashs() chan common.Hash
 // 	PushDelHashs(hashs []common.Hash)
 // }
+
 type IMemDag interface {
-	SetStableUnit(hash common.Hash, height uint64, txpool txspool.ITxPool)
-	AddUnit(unit *modules.Unit, txpool txspool.ITxPool) error
-	//Init(stablehash common.Hash, stableHeight uint64)
-	GetLastMainchainUnit(token modules.AssetId) *modules.Unit
+	AddStableUnit(unit *modules.Unit)
+	AddUnit(unit *modules.Unit, txpool txspool.ITxPool, isProd bool) (common2.IUnitRepository, common2.IUtxoRepository,
+		common2.IStateRepository, common2.IPropRepository, common2.IUnitProduceRepository, error)
+	GetLastStableUnitInfo() (common.Hash, uint64)
+	GetLastMainChainUnit() *modules.Unit
 	GetChainUnits() map[common.Hash]*modules.Unit
-	GetUnstableRepositories() (common2.IUnitRepository, common2.IUtxoRepository, common2.IStateRepository)
-	SetUnitGroupSign(uHash common.Hash, groupPubKey []byte, groupSign []byte, txpool txspool.ITxPool) error
+	SetStableThreshold(threshold int)
+	GetUnstableRepositories() (common2.IUnitRepository, common2.IUtxoRepository, common2.IStateRepository,
+		common2.IPropRepository, common2.IUnitProduceRepository)
+	SetUnitGroupSign(uHash common.Hash /*, groupPubKey []byte*/, groupSign []byte, txpool txspool.ITxPool) error
+	GetHeaderByHash(hash common.Hash) (*modules.Header, error)
+	GetHeaderByNumber(number *modules.ChainIndex) (*modules.Header, error)
+
+	SubscribeToGroupSignEvent(ch chan<- modules.ToGroupSignEvent) event.Subscription
+	Close()
 }

@@ -23,42 +23,10 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
-	// "github.com/palletone/go-palletone/common/hexutil"
+
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/palletone/go-palletone/common/ptndb"
-	"github.com/palletone/go-palletone/dag/constants"
-	"github.com/palletone/go-palletone/dag/dagconfig"
-	"github.com/palletone/go-palletone/dag/modules"
 )
-
-var (
-	AssocUnstableUnits map[string]modules.Joint
-)
-
-func SaveJoint(db ptndb.Database, objJoint *modules.Joint, onDone func()) (err error) {
-	if objJoint.Unsigned != "" {
-		return errors.New(objJoint.Unsigned)
-	}
-	obj_unit := objJoint.Unit
-	obj_unit_byte, _ := json.Marshal(obj_unit)
-
-	if err = db.Put(append(constants.UNIT_PREFIX, obj_unit.Hash().Bytes()...), obj_unit_byte); err != nil {
-		return
-	}
-	// add key in  unit_keys
-	log.Println("add unit key:", string(constants.UNIT_PREFIX)+obj_unit.Hash().String(),
-		AddUnitKeys(db, string(constants.UNIT_PREFIX)+obj_unit.Hash().String()))
-
-	if dagconfig.SConfig.Blight {
-		// save  update utxo , message , transaction
-
-	}
-
-	if onDone != nil {
-		onDone()
-	}
-	return
-}
 
 // encodeBlockNumber encodes a block number as big endian uint64
 func Uint64ToBytes(number uint64) []byte {
@@ -66,37 +34,12 @@ func Uint64ToBytes(number uint64) []byte {
 	binary.BigEndian.PutUint64(enc, number)
 	return enc
 }
+
 func BytesToUint64(b []byte) uint64 {
 
 	return binary.BigEndian.Uint64(b)
 }
 
-func GetUnitKeys(db ptndb.Database) []string {
-	var keys []string
-	if keys_byte, err := db.Get([]byte("array_units")); err != nil {
-		log.Println("get units error:", err)
-	} else {
-		if err := rlp.DecodeBytes(keys_byte[:], &keys); err != nil {
-			log.Println("error:", err)
-		}
-	}
-	return keys
-}
-func AddUnitKeys(db ptndb.Database, key string) error {
-	keys := GetUnitKeys(db)
-	if len(keys) <= 0 {
-		return errors.New("null keys.")
-	}
-	for _, v := range keys {
-
-		if v == key {
-			return errors.New("key is already exist.")
-		}
-	}
-	keys = append(keys, key)
-
-	return Store(db, "array_units", keys)
-}
 func ConvertBytes(val interface{}) (re []byte) {
 	var err error
 	if re, err = json.Marshal(val); err != nil {
@@ -122,7 +65,6 @@ func AddKeysWithTag(db ptndb.Database, key, tag string) error {
 	if len(keys) <= 0 {
 		return errors.New("null keys.")
 	}
-	log.Println("keys:=", keys)
 	for _, v := range keys {
 		if v == key {
 			return errors.New("key is already exist.")
@@ -133,8 +75,8 @@ func AddKeysWithTag(db ptndb.Database, key, tag string) error {
 	if err := db.Put([]byte(tag), ConvertBytes(keys)); err != nil {
 		return err
 	}
-	return nil
 
+	return nil
 }
 
 //  get  unit chain version
@@ -148,7 +90,7 @@ func GetUnitChainVersion(db ptndb.Database) int {
 }
 
 // SaveUnitChainVersion writes vsn as the version number to db.
-func SaveUnitChainVersion(db ptndb.Database, vsn int) error {
+func SaveUnitChainVersion(db ptndb.Putter, vsn int) error {
 	enc, _ := rlp.EncodeToBytes(uint(vsn))
 	return db.Put([]byte("UnitchainVersion"), enc)
 }

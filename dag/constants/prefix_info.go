@@ -20,89 +20,61 @@
 package constants
 
 // prefix info
+//各个Entity的Prefix应该都是2小写字母，不可重复
 var (
-	UNIT_PREFIX             = []byte("ut")  // unit_prefix + mci + hash
-	HEADER_PREFIX           = []byte("uh")  // prefix + hash
-	HEADER_HEIGTH_PREFIX    = []byte("uht") // prefix + height:hash
-	HeaderCanon_Prefix      = []byte("ch")  // Canon Header Prefix
-	UNIT_HASH_NUMBER_Prefix = []byte("hn")
-	//UNIT_NUMBER_PREFIX          = []byte("nh") // number 和unit hash 的对应关系
+	HEADER_PREFIX               = []byte("uh") // prefix + hash
+	HEADER_HEIGTH_PREFIX        = []byte("hh") // prefix + height:hash
+	UNIT_HASH_NUMBER_PREFIX     = []byte("hn")
 	BODY_PREFIX                 = []byte("ub")
 	TRANSACTION_PREFIX          = []byte("tx")
-	Transaction_Index           = []byte("ti")
-	TRANSACTIONS_PREFIX         = []byte("ts")
-	AddrTransactionsHash_Prefix = []byte("at")  // to addr  transactions hash prefix
-	AddrTx_From_Prefix          = []byte("fat") // from addr transactions hash prefix
-	AddrOutput_Prefix           = []byte("ao")  // addr output tx's hash + msg index.
-	AddrOutPoint_Prefix         = []byte("ap")  // addr outpoint
-	OutPointAddr_Prefix         = []byte("pa")  // outpoint addr
+	ADDR_TXID_PREFIX            = []byte("at") // to addr  transactions hash prefix
+	ADDR_OUTPOINT_PREFIX        = []byte("ap") // addr outpoint
+	OUTPOINT_ADDR_PREFIX        = []byte("pa") // outpoint addr
 	CONTRACT_STATE_PREFIX       = []byte("cs")
 	CONTRACT_TPL                = []byte("ct")
-	CONTRACT_TPL_REQ            = []byte("ctq")
-	CONTRACT_DEPLOY             = []byte("cdy")
-	CONTRACT_DEPLOY_REQ         = []byte("cdr")
-	CONTRACT_STOP               = []byte("csp")
-	CONTRACT_STOP_REQ           = []byte("csr")
-	CONTRACT_INVOKE             = []byte("civ")
-	CONTRACT_INVOKE_REQ         = []byte("ciq")
-	CONTRACT_SIGNATURE          = []byte("csn")
+	CONTRACT_TPL_CODE           = []byte("cc")
+	CONTRACT_DEPLOY             = []byte("cd")
+	CONTRACT_DEPLOY_REQ         = []byte("ce")
+	CONTRACT_STOP               = []byte("cp")
+	CONTRACT_STOP_REQ           = []byte("cq")
+	CONTRACT_INVOKE             = []byte("ci")
+	CONTRACT_INVOKE_REQ         = []byte("ck")
+	CONTRACT_SIGNATURE          = []byte("cn")
+	CONTRACT_PREFIX             = []byte("co")
+	CONTRACT_TPL_INSTANCE_MAP   = []byte("cm")
+	CONTRACT_JURY_PREFIX        = []byte("cj")
+	REQID_TXID_PREFIX           = []byte("rq")
+	MEDIATOR_INFO_PREFIX        = []byte("mi")
+	DEPOSIT_BALANCE_PREFIX      = []byte("db")
+	DEPOSIT_JURY_BALANCE_PREFIX = []byte("djbp")
+	//DEPOSIT_MEDIATOR_VOTE_PREFIX = []byte("dn")
+	PLEDGE_DEPOSIT_PREFIX  = []byte("pd")
+	PLEDGE_WITHDRAW_PREFIX = []byte("pw")
 
-	MESSAGES_PREFIX               = []byte("me")
-	POLL_PREFIX                   = []byte("po")
-	CREATE_VOTE_PREFIX            = []byte("vo")
-	ATTESTATION_PREFIX            = []byte("at")
-	ASSET_PREFIX                  = []byte("as")
-	ASSET_ATTESTORS               = []byte("ae")
-	MEDIATOR_INFO_PREFIX          = []byte("mi")
-	GLOBALPROPERTY_PREFIX         = []byte("gp")
-	DYNAMIC_GLOBALPROPERTY_PREFIX = []byte("dp")
-	MEDIATOR_SCHEME_PREFIX        = []byte("ms")
-	ACCOUNT_INFO_PREFIX           = []byte("ai")
-	ACCOUNT_PTN_BALANCE_PREFIX    = []byte("ab")
-	TokenTxHash_Prefix            = []byte("tt")
+	GLOBAL_PROPERTY_HISTORY_PREFIX = []byte("gh")
+
+	ACCOUNT_INFO_PREFIX        = []byte("ai")
+	ACCOUNT_PTN_BALANCE_PREFIX = []byte("ab")
+	TOKEN_TXID_PREFIX          = []byte("tt") //IndexDB中存储一个Token关联的TxId
+	TOKEN_EX_PREFIX            = []byte("te") //IndexDB中存储一个Token关联的ProofOfExistence
 	// lookup
-	LookupPrefix = []byte("l")
-
-	LastStableUnitHash   = []byte("stbu")
-	LastUnstableUnitHash = []byte("ustbu")
-	HeadUnitHash         = []byte("HeadUnitHash")
-	HeadHeaderKey        = []byte("LastHeader")
-	HeadFastKey          = []byte("LastFast")
-	TrieSyncKey          = []byte("TrieSync")
-	GenesisUnitHash      = []byte("GenesisUnitHash")
-	// contract
-	CONTRACT_PREFIX = []byte("cs")
-
-	// other prefix
-	EAENED_HEADERS_COMMISSION = "earned_headers_commossion"
-	ALL_UNITS                 = "array_units"
-	UTXOSNAPSHOT_PREFIX       = "us"
-
-	// utxo && state storage
-	CONTRACT_ATTRI    = []byte("contract") // like contract_[contract address]_[key]
-	UTXO_PREFIX       = []byte("uo")
-	UTXO_INDEX_PREFIX = []byte("ui")
-	ASSET_INFO_PREFIX = []byte("pi") // ACCOUNT_INFO_PREFIX is also "ai"  asset=property
-
-	// token info
-	TOKENTYPE  = []byte("tp") // tp[types]
-	TOKENINFOS = []byte("tokeninfos")
-	// state current chain index
-	CURRENTCHAININDEX_PREFIX = "ccix"
-
-	STATE_VOTER_LIST = []byte("vl")
-
-	// ReqId && TxHash maping
-	ReqIdPrefix      = []byte("req")
-	TxHash2ReqPrefix = []byte("tx2req")
+	LOOKUP_PREFIX              = []byte("lu")
+	UTXO_PREFIX                = []byte("uo")
+	SPENT_UTXO_PREFIX          = []byte("us")
+	UTXO_INDEX_PREFIX          = []byte("ui")
+	TrieSyncKey                = []byte("TrieSync")
+	LastUnitInfo               = []byte("stbu")
+	GenesisUnitHash            = []byte("GenesisUnitHash")
+	GLOBALPROPERTY_KEY         = []byte("gpGlobalProperty")
+	DYNAMIC_GLOBALPROPERTY_KEY = []byte("dpDynamicGlobalProperty")
+	MEDIATOR_SCHEDULE_KEY      = []byte("msMediatorSchedule")
+	DATA_VERSION_KEY           = []byte("gptnversion")
 
 	//filehash
-	IDX_FileHash_Txid = []byte("mda")
-)
-
-// suffix
-var (
-	NumberSuffix = []byte("n")
+	IDX_MAIN_DATA_TXID              = []byte("md") //Old value: mda
+	IDX_REF_DATA_PREFIX             = []byte("re")
+	RewardAddressPrefix             = "Addr:"
+	JURY_PROPERTY_USER_CONTRACT_KEY = []byte("jpuck")
 )
 
 // symbols

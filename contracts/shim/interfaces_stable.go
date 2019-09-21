@@ -29,7 +29,7 @@ import (
 // Chaincode interface must be implemented by all chaincodes. The runs
 // the transactions by calling these functions as specified.
 type Chaincode interface {
-	// Init is called during Instantiate transaction after the chaincode container
+	// Init is called during Instantiate transaction after the chaincode containerGetTxID
 	// has been established for the first time, allowing the chaincode to
 	// initialize its internal data
 	Init(stub ChaincodeStubInterface) pb.Response
@@ -44,7 +44,7 @@ type Chaincode interface {
 // modify their ledgers
 type ChaincodeStubInterface interface {
 	// GetArgs returns the arguments intended for the chaincode Init and Invoke
-	// as an array of byte arrays.
+	// as an arrayte a of byrrays.
 	GetArgs() [][]byte
 
 	// GetStringArgs returns the arguments intended for the chaincode Init and
@@ -95,6 +95,8 @@ type ChaincodeStubInterface interface {
 	// consider data modified by PutState that has not been committed.
 	// If the key does not exist in the state database, (nil, nil) is returned.
 	GetState(key string) ([]byte, error)
+	GetGlobalState(key string) ([]byte, error)
+	GetContractState(contractAddr common.Address, key string) ([]byte, error)
 	GetStateByPrefix(prefix string) ([]*modules.KeyValue, error)
 
 	// PutState puts the specified `key` and `value` into the transaction's
@@ -105,17 +107,20 @@ type ChaincodeStubInterface interface {
 	// composite keys, which internally get prefixed with 0x00 as composite
 	// key namespace.
 	PutState(key string, value []byte) error
+	PutGlobalState(key string, value []byte) error
 
-	OutChainAddress(outChainName string, params []byte) ([]byte, error)
-	OutChainTransaction(outChainName string, params []byte) ([]byte, error)
-	OutChainQuery(outChainName string, params []byte) ([]byte, error)
+	OutChainCall(outChainName string, method string, params []byte) ([]byte, error)
+
+	//OutChainUtil(outChainName string, params []byte) ([]byte, error)
+	//OutChainTokenOperation(outChainName string, params []byte) ([]byte, error)
+	//OutChainContractOperation(outChainName string, params []byte) ([]byte, error)
 
 	//retrun local jury's signature
 	SendJury(msgType uint32, consultContent []byte, myAnswer []byte) ([]byte, error)
-	//return all jury's signature and answer,format:[]JuryMsgSig
-	//type JuryMsgSig struct {
-	//	Signature []byte
-	//	Answer    []byte
+	//return all jury's Address and Address,format:[]JuryMsgAddr
+	//type JuryMsgAddr struct {
+	//	Address string
+	//	Address  []byte
 	//}
 	RecvJury(msgType uint32, consultContent []byte, timeout uint32) ([]byte, error)
 
@@ -123,6 +128,7 @@ type ChaincodeStubInterface interface {
 	// the transaction proposal. The `key` and its value will be deleted from
 	// the ledger when the transaction is validated and successfully committed.
 	DelState(key string) error
+	DelGlobalState(key string) error
 
 	// GetTxTimestamp returns the timestamp when the transaction was created. This
 	// is taken from the transaction ChannelHeader, therefore it will indicate the
@@ -136,7 +142,8 @@ type ChaincodeStubInterface interface {
 	SetEvent(name string, payload []byte) error
 
 	//获取合约的一些配置参数
-	GetSystemConfig(filed string) (value string, err error)
+	//GetSystemConfig(filed string) (value string, err error)
+	GetSystemConfig() (gp *modules.GlobalProperty, err error)
 	//获取支付合约的 from 地址
 	GetInvokeAddress() (invokeAddr common.Address, err error)
 	//获取支付ptn数量
@@ -152,7 +159,7 @@ type ChaincodeStubInterface interface {
 	//如果token为空则表示查询所有Token余额
 	GetTokenBalance(address string, token *modules.Asset) ([]*modules.InvokeTokens, error)
 	//将合约上锁定的某种Token支付出去
-	PayOutToken(addr string, invokeTokens *modules.InvokeTokens, lockTime uint32) error
+	PayOutToken(addr string, invokeTokens *modules.AmountAsset, lockTime uint32) error
 	//获取invoke参数，包括invokeAddr,tokens,fee,funcName,params
 	GetInvokeParameters() (invokeAddr common.Address, invokeTokens []*modules.InvokeTokens, invokeFees *modules.AmountAsset, funcName string, params []string, err error)
 	//定义并发行一种全新的Token
@@ -164,7 +171,7 @@ type ChaincodeStubInterface interface {
 	// 根据证书ID获得证书字节数据
 	GetRequesterCert() (certBytes []byte, err error)
 	// 验证证书是否合法, error返回的是不合法的原因
-	IsRequesterCertValidate() (bool, error)
+	IsRequesterCertValid() (bool, error)
 
 	// GetStateByRange returns a range iterator over a set of keys in the
 	// ledger. The iterator can be used to iterate over all keys

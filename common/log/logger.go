@@ -28,7 +28,6 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 	"log"
 	"strings"
-	"sync"
 )
 
 const (
@@ -49,11 +48,12 @@ const (
 	LogStderr = "stderr"
 )
 
-var defaultLogModule = []string{RootBuild, RootCmd, RootCommon, RootConfigure, RootCore, RootInternal, RootPtnclient, RootPtnjson, RootStatistics, RootVendor, RootWallet}
+//var defaultLogModule = []string{RootBuild, RootCmd, RootCommon, RootConfigure, RootCore, RootInternal,
+// RootPtnclient, RootPtnjson, RootStatistics, RootVendor, RootWallet}
 
 var LogConfig = DefaultConfig
 var Logger *zap.Logger
-var mux sync.RWMutex
+//var mux sync.RWMutex
 
 // init zap.logger
 func InitLogger() {
@@ -114,27 +114,30 @@ func initLogger() {
 		log.Fatal("init logger error: ", err)
 	}
 	// add openModule
-	if strings.Contains(LogConfig.OpenModule[0], ",") {
-		arr := strings.Split(LogConfig.OpenModule[0], ",")
-		LogConfig.OpenModule[0] = ""
-		LogConfig.OpenModule = append(LogConfig.OpenModule, arr...)
-		LogConfig.OpenModule = append(LogConfig.OpenModule, defaultLogModule...)
-	} else {
-		if !(len(LogConfig.OpenModule) == 1 && LogConfig.OpenModule[0] == "all") {
-			LogConfig.OpenModule = append(LogConfig.OpenModule, defaultLogModule...)
-		}
-	}
-	l.SetOpenModule(LogConfig.OpenModule)
+	//if strings.Contains(LogConfig.OpenModule[0], ",") {
+	//	arr := strings.Split(LogConfig.OpenModule[0], ",")
+	//	LogConfig.OpenModule[0] = ""
+	//	LogConfig.OpenModule = append(LogConfig.OpenModule, arr...)
+	//	LogConfig.OpenModule = append(LogConfig.OpenModule, defaultLogModule...)
+	//} else {
+	//	if !(len(LogConfig.OpenModule) == 1 && LogConfig.OpenModule[0] == "all") {
+	//		LogConfig.OpenModule = append(LogConfig.OpenModule, defaultLogModule...)
+	//	}
+	//}
+	//l.SetOpenModule(LogConfig.OpenModule)
 	l = l.WithOptions(zap.AddCallerSkip(1))
 	if LogConfig.RotationMaxSize > 0 {
 		includeStdout, filePath := getOutputPath(LogConfig.OutputPaths)
 		rotateLogCore := func(core zapcore.Core) zapcore.Core {
-			w := zapcore.AddSync(&lumberjack.Logger{
+			mylogger := &RotationLogger{Max1LogLength: int64(LogConfig.MaxLogMessageLength)}
+			mylogger.Logger = &lumberjack.Logger{
 				Filename:   filePath,
 				MaxSize:    LogConfig.RotationMaxSize, // megabytes
 				MaxBackups: 60,
 				MaxAge:     LogConfig.RotationMaxAge, // days
-			})
+			}
+
+			w := zapcore.AddSync(mylogger)
 			if includeStdout {
 				stdout, _, _ := zap.Open("stdout")
 				w = zap.CombineWriteSyncers(stdout, w)
@@ -189,6 +192,25 @@ func Debugf(format string, ctx ...interface{}) {
 		InitLogger()
 	}
 	Logger.Debug(fmt.Sprintf(format, ctx...))
+}
+
+type GetString func() string
+
+func DebugDynamic(getStr GetString) {
+	if Logger == nil {
+		InitLogger()
+	}
+	if LogConfig.LoggerLvl == "DEBUG" {
+		Logger.Debug(getStr())
+	}
+}
+func InfoDynamic(getStr GetString) {
+	if Logger == nil {
+		InitLogger()
+	}
+	if LogConfig.LoggerLvl == "DEBUG" || LogConfig.LoggerLvl == "INFO" {
+		Logger.Info(getStr())
+	}
 }
 
 // Info
@@ -323,4 +345,19 @@ func (c Ctx) toArray() []interface{} {
 	}
 
 	return arr
+}
+
+//用于限制一条Log的大小
+type RotationLogger struct {
+	Max1LogLength int64
+	Logger        *lumberjack.Logger
+}
+
+func (l *RotationLogger) Write(p []byte) (n int, err error) {
+	writeLen := int64(len(p))
+	p1 := p
+	if writeLen > l.Max1LogLength {
+		p1 = append(p[0:l.Max1LogLength], []byte("...\r\n")...)
+	}
+	return l.Logger.Write(p1)
 }

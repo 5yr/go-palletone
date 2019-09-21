@@ -12,13 +12,11 @@ import (
 	dagcomm "github.com/palletone/go-palletone/dag/common"
 	"github.com/palletone/go-palletone/dag/modules"
 	"github.com/palletone/go-palletone/tokenengine"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestCreateUnit(t *testing.T) {
-	//path := "E:\\codes\\go\\src\\github.com\\palletone\\go-palletone\\cmd\\gptn\\gptn\\leveldb"
-	//
-	//dagconfig.DbPath = path
-	//db, err := storage.Init(path, 16, 16)
+
 	db, err := ptndb.NewMemDatabase()
 	if err != nil {
 		log.Error("Init db error", "error", err.Error())
@@ -56,9 +54,8 @@ func createUnit() (*modules.Unit, error) {
 	outputs = append(outputs, out)
 	payment := modules.NewPaymentPayload(inputs, outputs)
 	msg0 := modules.NewMessage(modules.APP_PAYMENT, payment)
-	tplPayload := modules.NewContractTplPayload([]byte("contract_template0000"),
-		"TestContractTpl", "./contract", "1.1.1", 1024,
-		[]byte{175, 52, 23, 180, 156, 109, 17, 232, 166, 226, 84, 225, 173, 184, 229, 159})
+	tplPayload := modules.NewContractTplPayload([]byte("contract_template0000"), 1024,
+		[]byte{175, 52, 23, 180, 156, 109, 17, 232, 166, 226, 84, 225, 173, 184, 229, 159}, modules.ContractError{})
 	// new msg
 	msg := modules.NewMessage(modules.APP_CONTRACT_TPL, tplPayload)
 	msgs := []*modules.Message{msg0}
@@ -74,44 +71,13 @@ func createUnit() (*modules.Unit, error) {
 	return unit, err
 }
 
-//func TestDagRefreshUtxos(t *testing.T) {
-//	//db := storage.ReNewDbConn("/Users/jay/code/gocode/src/github.com/palletone/go-palletone/bin/work/palletone/gptn/leveldb/")
-//	db, _ := ptndb.NewMemDatabase()
-//	test_dag, _ := NewDag4GenesisInit(db)
-//
-//	txpool := txspool.NewTxPool(txspool.DefaultTxPoolConfig, test_dag)
-//	// txpool := txspool.NewTxPool4Test()
-//	dag_test, err := NewDagForTest(db, txpool)
-//	if err != nil {
-//		t.Fatal("New dag for test is faild,error: ", err)
-//	}
-//	unit, err := createUnit()
-//	if err != nil {
-//		log.Info("create test unit is failed.", "error", err)
-//		return
-//	}
-//	dag_test.SaveUnit(unit, txpool, true)
-//	// 添加delhash
-//
-//	// unit := dag_test.GetCurrentUnit(modules.PTNCOIN)
-//	data := make(map[modules.OutPoint]*modules.Utxo)
-//	dag_test.utxos_cache[unit.Hash()] = data
-//	log.Debug("this unit hash info", "hash", unit.Hash().String())
-//	dag_test.Memdag.PushDelHashs([]common.Hash{unit.Hash()})
-//	log.Info("start refresh cache utxos.", "cache_len", len(dag_test.utxos_cache))
-//
-//	dag_test.RefreshCacheUtxos()
-//
-//	log.Info("stop refresh cache utxos.", "cache_len", len(dag_test.utxos_cache))
-//
-//}
 func TestTxCountAndUnitSize(t *testing.T) {
 	sign, _ := hex.DecodeString("2c731f854ef544796b2e86c61b1a9881a0148da0c1001f0da5bd2074d2b8360367e2e0a57de91a5cfe92b79721692741f47588036cf0101f34dab1bfda0eb030")
 	pubKey, _ := hex.DecodeString("0386df0aef707cc5bc8d115c2576f844d2734b05040ef2541e691763f802092c09")
 	unlockScript := tokenengine.GenerateP2PKHUnlockScript(sign, pubKey)
 	a := modules.NewPTNAsset()
 	addr, _ := common.StringToAddress("P13pBrshF6JU7QhMmzJjXx3mWHh13YHAUAa")
-	lockScript := tokenengine.GenerateLockScript(addr)
+	lockScript := tokenengine.Instance.GenerateLockScript(addr)
 	for i := 1; i < 100000; i *= 2 {
 		txs := modules.Transactions{}
 		for j := 0; j < i; j++ {
@@ -147,3 +113,46 @@ func newHeader() *modules.Header {
 	h.Authors = au
 	return h
 }
+func TestDag_InsertHeaderDag(t *testing.T) {
+	dag, err := setupDag()
+	assert.NotNil(t, dag)
+	assert.Nil(t, err)
+	headers := []*modules.Header{newHeader()}
+
+	dag.InsertHeaderDag(headers)
+}
+func setupDag() (*Dag, error) {
+	db, err := ptndb.NewMemDatabase()
+	if err != nil {
+		log.Error("Init db error", "error", err.Error())
+		return nil, err
+	}
+	unit, _ := createUnit()
+	// save unit
+	initDag, err := NewDag4GenesisInit(db)
+	if err != nil {
+		log.Error("New dag error", "error", err.Error())
+		return nil, err
+	}
+	//txpool := txspool.NewTxPool(txspool.DefaultTxPoolConfig, test_dag)
+	if err := initDag.SaveUnit(unit, nil, true); err != nil {
+		log.Error("Save unit error", "error", err.Error())
+		return nil, err
+	}
+	test_dag, err := NewDagForTest(db)
+	return test_dag, err
+}
+
+//func TestDag_GetGenesisUnit(t *testing.T) {
+//	db,_:=ptndb.NewLDBDatabase("./leveldb",0,128)
+//	dag,_:=NewDag4GenesisInit(db)
+//	txid:= common.HexToHash("0x10f0375ea48aa09099b0148d8a19fc3ac297a22b29bff0dfa99546f7af0fb57c")
+//	tx,err:= dag.GetTransactionOnly(txid)
+//	assert.Nil(t,err)
+//	t.Log(tx.Hash().String())
+//	for i,msg:=range tx.TxMessages{
+//		data,_:= json.Marshal(msg.Payload)
+//		t.Logf("Message[%d], APP:%v,%s",i,msg.App,string(data))
+//	}
+//	assert.Equal(t,txid,tx.Hash())
+//}

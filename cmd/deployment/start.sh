@@ -18,10 +18,17 @@ function LoopStart()
     while [ $count -le $1 ] ;  
     do  
     StartGPTN $count 
+    sleep 3
     let ++count;  
     done  
     return 0;  
 }
-read -p "Please input the numbers of nodes you want: " n;  
+
+n=
+if [ -n "$1" ]; then
+    n=$1
+else
+    read -p "Please input the numbers of nodes you want: " n;
+fi
  
 LoopStart $n;

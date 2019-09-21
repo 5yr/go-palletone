@@ -23,14 +23,16 @@ package sysconfigcc
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/palletone/go-palletone/common"
-	"github.com/palletone/go-palletone/common/log"
-	"github.com/palletone/go-palletone/contracts/shim"
-	"github.com/palletone/go-palletone/core/vmContractPub/protos/peer"
-	"github.com/palletone/go-palletone/dag/modules"
 	"sort"
 	"strconv"
 	"time"
+
+	"github.com/palletone/go-palletone/common"
+	"github.com/palletone/go-palletone/common/log"
+	"github.com/palletone/go-palletone/contracts/shim"
+	"github.com/palletone/go-palletone/core"
+	"github.com/palletone/go-palletone/core/vmContractPub/protos/peer"
+	"github.com/palletone/go-palletone/dag/modules"
 )
 
 type SysConfigChainCode struct {
@@ -44,23 +46,29 @@ func (s *SysConfigChainCode) Init(stub shim.ChaincodeStubInterface) peer.Respons
 func (s *SysConfigChainCode) Invoke(stub shim.ChaincodeStubInterface) peer.Response {
 	funcName, args := stub.GetFunctionAndParameters()
 	switch funcName {
-	case "getAllSysParamsConf":
-		log.Info("Start getAllSysParamsConf Invoke")
-		resultByte, err := s.getAllSysParamsConf(stub)
-		if err != nil {
-			jsonResp := "{\"Error\":\"getAllSysParamsConf err: " + err.Error() + "\"}"
-			return shim.Error(jsonResp)
-		}
-		return shim.Success(resultByte)
-	case "getSysParamValByKey":
-		log.Info("Start getSysParamValByKey Invoke")
-		resultByte, err := s.getSysParamValByKey(stub, args)
-		if err != nil {
-			jsonResp := "{\"Error\":\"getSysParamValByKey err: " + err.Error() + "\"}"
-			return shim.Error(jsonResp)
-		}
-		return shim.Success(resultByte)
-	case "updateSysParamWithoutVote":
+	//case "getAllSysParamsConf":
+	//	log.Info("Start getAllSysParamsConf Invoke")
+	//	resultByte, err := s.getAllSysParamsConf(stub)
+	//	if err != nil {
+	//		jsonResp := "{\"Error\":\"getAllSysParamsConf err: " + err.Error() + "\"}"
+	//		return shim.Error(jsonResp)
+	//	}
+	//	resut := ptnjson.ConvertAllSysConfigToJson(resultByte)
+	//	res, err := json.Marshal(resut)
+	//	if err != nil {
+	//		jsonResp := "{\"Error\":\"getAllSysParamsConf err: " + err.Error() + "\"}"
+	//		return shim.Error(jsonResp)
+	//	}
+	//	return shim.Success(res)
+	//case "getSysParamValByKey":
+	//	log.Info("Start getSysParamValByKey Invoke")
+	//	resultByte, err := s.getSysParamValByKey(stub, args)
+	//	if err != nil {
+	//		jsonResp := "{\"Error\":\"getSysParamValByKey err: " + err.Error() + "\"}"
+	//		return shim.Error(jsonResp)
+	//	}
+	//	return shim.Success(resultByte)
+	case UpdateSysParamWithoutVote:
 		log.Info("Start updateSysParamWithoutVote Invoke")
 		resultByte, err := s.updateSysParamWithoutVote(stub, args)
 		if err != nil {
@@ -70,7 +78,7 @@ func (s *SysConfigChainCode) Invoke(stub shim.ChaincodeStubInterface) peer.Respo
 		return shim.Success(resultByte)
 	case "getWithoutVoteResult":
 		log.Info("Start getWithoutVoteResult Invoke")
-		resultByte, err := stub.GetState(sysParam)
+		resultByte, err := stub.GetState(modules.DesiredSysParamsWithoutVote)
 		if err != nil {
 			jsonResp := "{\"Error\":\"getWithoutVoteResult err: " + err.Error() + "\"}"
 			return shim.Success([]byte(jsonResp))
@@ -84,7 +92,7 @@ func (s *SysConfigChainCode) Invoke(stub shim.ChaincodeStubInterface) peer.Respo
 			return shim.Success([]byte(jsonResp))
 		}
 		return shim.Success(resultByte)
-	case "createVotesTokens":
+	case CreateVotesTokens:
 		log.Info("Start createVotesTokens Invoke")
 		resultByte, err := s.createVotesTokens(stub, args)
 		if err != nil {
@@ -108,6 +116,7 @@ func (s *SysConfigChainCode) Invoke(stub shim.ChaincodeStubInterface) peer.Respo
 }
 
 func (s *SysConfigChainCode) getVotesResult(stub shim.ChaincodeStubInterface, args []string) ([]byte, error) {
+	log.Debug("getVotesResult", args)
 	//params check
 	//if len(args) < 1 {
 	//	return nil, fmt.Errorf("need 1 args (AssetID String)")
@@ -138,7 +147,7 @@ func (s *SysConfigChainCode) getVotesResult(stub shim.ChaincodeStubInterface, ar
 		isVoteEnd = true
 	}
 	//calculate result
-	var supportResults []*modules.SysSupportResult
+	supportResults := make([]*modules.SysSupportResult, 0, len(topicSupports))
 	for i, oneTopicSupport := range topicSupports {
 		oneResult := &modules.SysSupportResult{}
 		oneResult.TopicIndex = uint64(i) + 1
@@ -166,7 +175,7 @@ func (s *SysConfigChainCode) getVotesResult(stub shim.ChaincodeStubInterface, ar
 
 func (s *SysConfigChainCode) createVotesTokens(stub shim.ChaincodeStubInterface, args []string) ([]byte, error) {
 	//params check
-	if len(args) < 5 {
+	if len(args) != 5 {
 		return nil, fmt.Errorf("need 5 args (Name,VoteType,TotalSupply,VoteEndTime,VoteContentJson)")
 	}
 	//get creator
@@ -175,12 +184,16 @@ func (s *SysConfigChainCode) createVotesTokens(stub shim.ChaincodeStubInterface,
 		jsonResp := "{\"Error\":\"Failed to get invoke address\"}"
 		return nil, fmt.Errorf(jsonResp)
 	}
-	//TODO 基金会地址
-	//foundationAddress, _ := stub.GetSystemConfig("FoundationAddress")
-	//if createAddr != foundationAddress {
-	//	jsonResp := "{\"Error\":\"Only foundation can call this function\"}"
-	//	return nil, fmt.Errorf(jsonResp)
-	//}
+
+	gp, err := stub.GetSystemConfig()
+	if err != nil {
+		return nil, fmt.Errorf("fail to get system config err")
+	}
+	if createAddr.Str() != gp.ChainParameters.FoundationAddress {
+		jsonResp := "{\"Error\":\"Only foundation can call this function\"}"
+		return nil, fmt.Errorf(jsonResp)
+	}
+
 	//==== convert params to token information
 	var vt modules.VoteToken
 	//name symbol
@@ -233,11 +246,24 @@ func (s *SysConfigChainCode) createVotesTokens(stub shim.ChaincodeStubInterface,
 		return nil, fmt.Errorf(jsonResp)
 	}
 	//init support
-	var supports []SysTopicSupports
+	supports := make([]SysTopicSupports, 0, len(voteTopics))
 	for _, oneTopic := range voteTopics {
-		var oneSupport SysTopicSupports
-		oneSupport.TopicTitle = oneTopic.TopicTitle
+		oneSupport := SysTopicSupports{TopicTitle: oneTopic.TopicTitle}
 		for _, oneOption := range oneTopic.SelectOptions {
+			// 检查参数
+			err := core.CheckSysConfigArgType(oneSupport.TopicTitle, oneOption)
+			if err != nil {
+				log.Debugf(err.Error())
+				return nil, err
+			}
+
+			err = core.CheckChainParameterValue(oneSupport.TopicTitle, oneOption, &gp.ImmutableParameters,
+				&gp.ChainParameters, func() int { return GetMediatorCount(stub) })
+			if err != nil {
+				log.Debugf(err.Error())
+				return nil, err
+			}
+
 			oneResult := &modules.SysVoteResult{}
 			oneResult.SelectOption = oneOption
 			oneSupport.VoteResults = append(oneSupport.VoteResults, oneResult)
@@ -285,6 +311,13 @@ func (s *SysConfigChainCode) createVotesTokens(stub shim.ChaincodeStubInterface,
 	err = stub.DefineToken(byte(modules.AssetType_VoteToken), createJson, createAddr.String())
 	if err != nil {
 		jsonResp := "{\"Error\":\"Failed to call stub.DefineToken\"}"
+		return nil, fmt.Errorf(jsonResp)
+	}
+
+	//add global state
+	err = setGlobal(stub, &info)
+	if err != nil {
+		jsonResp := "{\"Error\":\"Failed to add global state\"}"
 		return nil, fmt.Errorf(jsonResp)
 	}
 
@@ -403,109 +436,128 @@ func (s *SysConfigChainCode) nodesVote(stub shim.ChaincodeStubInterface, args []
 	return []byte("NodesVote success."), nil
 }
 
-func (s *SysConfigChainCode) getAllSysParamsConf(stub shim.ChaincodeStubInterface) ([]byte, error) {
-	sysVal, err := stub.GetState("sysConf")
+//func (s *SysConfigChainCode) getAllSysParamsConf(stub shim.ChaincodeStubInterface) (map[string]*modules.ContractStateValue, error) {
+//	sysVal, err := stub.GetContractAllState()
+//	if err != nil {
+//		return nil, err
+//	}
+//	return sysVal, nil
+//}
+
+func GetMediatorCount(stub shim.ChaincodeStubInterface) int {
+	byte, err := stub.GetState(modules.MediatorList)
 	if err != nil {
-		return nil, err
+		return 0
 	}
-	return sysVal, nil
+	if len(byte) == 0 {
+		return 0
+	}
+
+	list := make(map[string]string)
+	err = json.Unmarshal(byte, &list)
+	if err != nil {
+		return 0
+	}
+
+	return len(list)
 }
 
 func (s *SysConfigChainCode) updateSysParamWithoutVote(stub shim.ChaincodeStubInterface, args []string) ([]byte, error) {
-	//invokeFromAddr, err := stub.GetInvokeAddress()
-	//if err != nil {
-	//	return nil, err
-	//}
-	//TODO 基金会地址
-	//foundationAddress, _ := stub.GetSystemConfig("FoundationAddress")
-	//if invokeFromAddr != foundationAddress {
-	//	jsonResp := "{\"Error\":\"Only foundation can call this function\"}"
-	//	return nil, fmt.Errorf(jsonResp)
-	//}
-	//key := args[0]
-	//newValue := args[1]
-	//oldValue, err := stub.GetState(args[0])
-	//if err != nil {
-	//	return nil, err
-	//}
-	//err = stub.PutState(key, []byte(newValue))
-	//if err != nil {
-	//	return nil, err
-	//}
-	//sysValByte, err := stub.GetState("sysConf")
-	//if err != nil {
-	//	return nil, err
-	//}
-	//sysVal := &core.SystemConfig{}
-	//err = json.Unmarshal(sysValByte, sysVal)
-	//if err != nil {
-	//	return nil, err
-	//}
-	//switch key {
-	//case "DepositAmountForJury":
-	//	sysVal.DepositAmountForJury = newValue
-	//case "DepositRate":
-	//	sysVal.DepositRate = newValue
-	//case "FoundationAddress":
-	//	sysVal.FoundationAddress = newValue
-	//case "DepositAmountForMediator":
-	//	sysVal.DepositAmountForMediator = newValue
-	//case "DepositAmountForDeveloper":
-	//	sysVal.DepositAmountForDeveloper = newValue
-	//case "DepositPeriod":
-	//	sysVal.DepositPeriod = newValue
-	//case "RootCAHolder":
-	//	sysVal.RootCAHolder = newValue
-	//}
-	//sysValByte, err = json.Marshal(sysVal)
-	//if err != nil {
-	//	return nil, err
-	//}
-	//err = stub.PutState("sysConf", sysValByte)
-	//if err != nil {
-	//	return nil, err
-	//}
-	//jsonResp := "{\"Success\":\"update value from " + string(oldValue) + " to " + newValue + "\"}"
-	//return []byte(jsonResp), nil
+	if len(args) != 2 {
+		err := "args len not equal 2"
+		log.Debugf(err)
+		return nil, fmt.Errorf(err)
+	}
 
-	//TODO mediator 换届时的相关处理
-	modify := &modules.FoundModify{}
-	modify.Key = args[0]
-	modify.Value = args[1]
-	resultBytes, err := stub.GetState(sysParam)
+	field, value := args[0], args[1]
+
+	// 检查参数
+	err := core.CheckSysConfigArgType(field, value)
 	if err != nil {
+		log.Debugf(err.Error())
 		return nil, err
 	}
-	var modifies []*modules.FoundModify
-	if resultBytes == nil {
-		modifies = append(modifies, modify)
-	} else {
-		err := json.Unmarshal(resultBytes, &modifies)
-		if err != nil {
-			return nil, err
-		}
-		modifies = append(modifies, modify)
-	}
-	modifyByte, err := json.Marshal(modifies)
-	err = stub.PutState(sysParam, modifyByte)
+
+	gp, err := stub.GetSystemConfig()
 	if err != nil {
+		return nil, fmt.Errorf("fail to get system config err")
+	}
+
+	err = core.CheckChainParameterValue(field, value, &gp.ImmutableParameters,
+		&gp.ChainParameters, func() int { return GetMediatorCount(stub) })
+	if err != nil {
+		log.Debugf(err.Error())
 		return nil, err
 	}
-	return []byte(modifyByte), nil
-}
 
-func (s *SysConfigChainCode) getSysParamValByKey(stub shim.ChaincodeStubInterface, args []string) ([]byte, error) {
-	if len(args) != 1 {
-		jsonResp := "{\"Error\":\" need 1 args (AssetID String)\"}"
+	createAddr, err := stub.GetInvokeAddress()
+	if err != nil {
+		jsonResp := "{\"Error\":\"Failed to get invoke address\"}"
 		return nil, fmt.Errorf(jsonResp)
 	}
-	val, err := stub.GetSystemConfig(args[0])
-	//val, err := stub.GetState(args[0])
+
+	if createAddr.Str() != gp.ChainParameters.FoundationAddress {
+		jsonResp := "{\"Error\":\"Only foundation can call this function\"}"
+		return nil, fmt.Errorf(jsonResp)
+	}
+
+	resultBytes, err := stub.GetState(modules.DesiredSysParamsWithoutVote)
+	if err != nil {
+		log.Debugf(err.Error())
+		return nil, err
+	}
+
+	var modifies map[string]string
+	if resultBytes != nil && string(resultBytes) != "" {
+		err := json.Unmarshal(resultBytes, &modifies)
+		if err != nil {
+			log.Debugf(err.Error())
+			return nil, err
+		}
+	}
+
+	if modifies == nil {
+		modifies = make(map[string]string)
+	}
+
+	modifies[field] = value
+	modifyByte, err := json.Marshal(modifies)
 	if err != nil {
 		return nil, err
 	}
-	jsonResp := "{\"" + args[0] + "\":\"" + string(val) + "\"}"
-	return []byte(jsonResp), nil
+	err = stub.PutState(modules.DesiredSysParamsWithoutVote, modifyByte)
+	if err != nil {
+		log.Debugf(err.Error())
+		return nil, err
+	}
+
+	return modifyByte, nil
+}
+
+//func (s *SysConfigChainCode) getSysParamValByKey(stub shim.ChaincodeStubInterface, args []string) ([]byte, error) {
+//	if len(args) != 1 {
+//		jsonResp := "{\"Error\":\" need 1 args (AssetID String)\"}"
+//		return nil, fmt.Errorf(jsonResp)
+//	}
+//	val, err := stub.GetSystemConfig(args[0])
+//	//val, err := stub.GetState(args[0])
+//	if err != nil {
+//		return nil, err
+//	}
+//	// 并不是所有的配置的string类型
+//	jsonResp := "{\"" + args[0] + "\":\"" + string(val) + "\"}"
+//	return []byte(jsonResp), nil
+//}
+
+func setGlobal(stub shim.ChaincodeStubInterface, tkInfo *SysTokenInfo) error {
+	gTkInfo := modules.GlobalTokenInfo{Symbol: tkInfo.Symbol, TokenType: 4, Status: 0, CreateAddr: tkInfo.CreateAddr,
+		TotalSupply: tkInfo.TotalSupply, SupplyAddr: "", AssetID: tkInfo.AssetID}
+	val, err := json.Marshal(gTkInfo)
+	if err != nil {
+		return err
+	}
+	err = stub.PutGlobalState(modules.GlobalPrefix+gTkInfo.Symbol, val)
+	return err
 }
 
 func getSymbols(stub shim.ChaincodeStubInterface) *SysTokenInfo {
@@ -513,7 +565,7 @@ func getSymbols(stub shim.ChaincodeStubInterface) *SysTokenInfo {
 	tkInfo := SysTokenInfo{}
 	//TODO
 	//tkInfoBytes, _ := stub.GetState(symbolsKey + assetID)
-	tkInfoBytes, _ := stub.GetState(sysParams)
+	tkInfoBytes, _ := stub.GetState(modules.DesiredSysParamsWithVote)
 	if len(tkInfoBytes) == 0 {
 		return nil
 	}
@@ -524,12 +576,13 @@ func getSymbols(stub shim.ChaincodeStubInterface) *SysTokenInfo {
 	}
 	return &tkInfo
 }
+
 func setSymbols(stub shim.ChaincodeStubInterface, tkInfo *SysTokenInfo) error {
 	val, err := json.Marshal(tkInfo)
 	if err != nil {
 		return err
 	}
-	err = stub.PutState(sysParams, val)
+	err = stub.PutState(modules.DesiredSysParamsWithVote, val)
 	return err
 }
 

@@ -24,8 +24,6 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
-	"io/ioutil"
-	"os"
 	"strings"
 
 	"github.com/palletone/go-palletone/common/log"
@@ -35,7 +33,6 @@ import (
 	"github.com/palletone/go-palletone/core/vmContractPub/metadata"
 	pb "github.com/palletone/go-palletone/core/vmContractPub/protos/peer"
 	cutil "github.com/palletone/go-palletone/vm/common"
-	"github.com/spf13/viper"
 )
 
 // Interface for validating the specification and and writing the package for
@@ -56,9 +53,9 @@ type Platform interface {
 var _Find = Find
 
 //var _GetPath = config.GetPath
-var _VGetBool = viper.GetBool
-var _OSStat = os.Stat
-var _IOUtilReadFile = ioutil.ReadFile
+//var _VGetBool = viper.GetBool
+//var _OSStat = os.Stat
+//var _IOUtilReadFile = ioutil.ReadFile
 var _CUtilWriteBytesToPackage = cutil.WriteBytesToPackage
 var _generateDockerfile = generateDockerfile
 var _generateDockerBuild = generateDockerBuild
@@ -111,7 +108,7 @@ func generateDockerfile(platform Platform, cds *pb.ChaincodeDeploymentSpec) ([]b
 	// ----------------------------------------------------------------------------------------------------
 	base, err := platform.GenerateDockerfile(cds)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to generate platform-specific Dockerfile: %s", err)
+		return nil, fmt.Errorf("Failed to generate platform-specific Dockerfile: %s", err.Error())
 	}
 	buf = append(buf, base)
 
@@ -129,7 +126,7 @@ func generateDockerfile(platform Platform, cds *pb.ChaincodeDeploymentSpec) ([]b
 	//append version so chaincode build version can be compared against peer build version
 	buf = append(buf, fmt.Sprintf("ENV CORE_CHAINCODE_BUILDLEVEL=%s", metadata.Version))
 
-	buf = append(buf, fmt.Sprint("CMD [\"/bin/sh\", \"-c\", \"cd / && tar -xvf binpackage.tar -C /usr/local/bin && cd /usr/local/bin && ./chaincode\"]"))
+	buf = append(buf, fmt.Sprint("CMD [\"/bin/sh\", \"-c\", \"cd / && tar -xvf binpackage.tar -C $GOPATH/bin && rm binpackage.tar && rm Dockerfile && cd $GOPATH/bin && ./chaincode\"]"))
 	// ----------------------------------------------------------------------------------------------------
 	// Finalize it
 	// ----------------------------------------------------------------------------------------------------
@@ -198,7 +195,7 @@ func GenerateDockerBuild(cds *pb.ChaincodeDeploymentSpec) (io.Reader, error) {
 		tw := tar.NewWriter(gw)
 		err := _generateDockerBuild(platform, cds, inputFiles, tw)
 		if err != nil {
-			log.Error("GenerateDockerBuild error", err)
+			log.Debugf("GenerateDockerBuild error:%s", err.Error())
 		}
 
 		tw.Close()
@@ -206,5 +203,5 @@ func GenerateDockerBuild(cds *pb.ChaincodeDeploymentSpec) (io.Reader, error) {
 		output.CloseWithError(err)
 	}()
 
-	return input, nil
+	return input, err
 }

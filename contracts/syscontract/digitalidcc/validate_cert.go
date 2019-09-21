@@ -73,7 +73,7 @@ func ValidateCRLIssuer(issuer string, crl *pkix.CertificateList, stub shim.Chain
 
 func checkExists(cert *x509.Certificate, stub shim.ChaincodeStubInterface) error {
 	// check root ca
-	rootCert, err := GetRootCert(stub)
+	rootCert, err := GetRootCACert(stub)
 	if err != nil {
 		return err
 	}
@@ -99,13 +99,13 @@ func validateIssuer(issuer string, cert *x509.Certificate, stub shim.ChaincodeSt
 		return err
 	}
 	// check in intermediate certificate
-	rootCert, err := GetRootCert(stub)
+	rootCert, err := GetRootCACert(stub)
 	if err != nil {
 		return err
 	}
 	if issuer == string(rootCAHolder) {
 		if cert.Issuer.String() != rootCert.Subject.String() {
-			return fmt.Errorf("cert issuer is invalid")
+			return fmt.Errorf("cert issuer is invalid, excepted %s but %s", rootCert.Subject.String(), cert.Issuer.String())
 		}
 	} else {
 		// query certid
@@ -122,7 +122,7 @@ func validateIssuer(issuer string, cert *x509.Certificate, stub shim.ChaincodeSt
 			return err
 		}
 		if revocationTime.IsZero() || revocationTime.Before(time.Now()) {
-			return fmt.Errorf("Has no validate intermidate certificate")
+			return fmt.Errorf("Has no validate intermidate certificate. Time is %s", revocationTime.String())
 		}
 	}
 	return nil
@@ -132,7 +132,7 @@ func validateIssuer(issuer string, cert *x509.Certificate, stub shim.ChaincodeSt
 // To validate certificate chain signature
 func ValidateCertChain(cert *x509.Certificate, stub shim.ChaincodeStubInterface) error {
 	// query root ca cert bytes
-	rootCert, err := GetRootCert(stub)
+	rootCert, err := GetRootCACert(stub)
 	if err != nil {
 		return err
 	}
@@ -172,7 +172,7 @@ func ValidateCRLIssuerSig(issuerAddr string, crl *pkix.CertificateList, stub shi
 		return err
 	}
 	if issuerAddr == string(caHolder) {
-		rootCert, err := GetRootCert(stub)
+		rootCert, err := GetRootCACert(stub)
 		if err != nil {
 			return err
 		}

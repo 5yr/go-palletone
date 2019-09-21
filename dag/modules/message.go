@@ -17,6 +17,9 @@
 package modules
 
 import (
+	"bytes"
+	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -24,9 +27,6 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/palletone/go-palletone/common"
 	"github.com/palletone/go-palletone/common/log"
-
-	"bytes"
-	"github.com/shopspring/decimal"
 )
 
 type MessageType byte
@@ -40,10 +40,8 @@ const (
 	APP_CONTRACT_STOP
 	APP_SIGNATURE
 
-	//APP_CONFIG
 	APP_DATA
-	OP_MEDIATOR_CREATE
-	OP_ACCOUNT_UPDATE
+	APP_ACCOUNT_UPDATE
 
 	APP_UNKNOW = 99
 
@@ -53,8 +51,25 @@ const (
 	APP_CONTRACT_STOP_REQUEST   = 103
 	// 为了兼容起见:
 	// 添加別的request需要添加在 APP_CONTRACT_TPL_REQUEST 与 APP_CONTRACT_STOP_REQUEST 之间
-	// 添加别的msg类型，需要添加到OP_MEDIATOR_CREATE 与 APP_UNKNOW之间
+	// 添加别的msg类型，需要添加到 APP_ACCOUNT_UPDATE 与 APP_UNKNOW之间
 )
+
+const (
+	FoundationAddress = "FoundationAddress"
+	JuryList          = "JuryList"
+	DeveloperList     = "DeveloperList"
+	DepositRate       = "DepositRate"
+)
+
+const (
+	DesiredSysParamsWithoutVote = "desiredSysParamsWithoutVote"
+	DesiredSysParamsWithVote    = "desiredSysParamsWithVote"
+	DesiredActiveMediatorCount  = "ActiveMediatorCount"
+)
+
+func (mt MessageType) IsRequest() bool {
+	return mt > APP_UNKNOW
+}
 
 // key: message.UnitHash(message+timestamp)
 type Message struct {
@@ -77,27 +92,17 @@ func (msg *Message) CopyMessages(cpyMsg *Message) *Message {
 	default:
 		//case APP_PAYMENT, APP_CONTRACT_TPL, APP_DATA:
 		msg.Payload = cpyMsg.Payload
-		//case APP_CONFIG:
-		//	payload, _ := cpyMsg.Payload.(*ConfigPayload)
-		//	newPayload := ConfigPayload{
-		//		ConfigSet: []ContractWriteSet{},
-		//	}
-		//	for _, p := range payload.ConfigSet {
-		//		newPayload.ConfigSet = append(newPayload.ConfigSet, ContractWriteSet{Key: p.Key, Value: p.Value})
-		//	}
-		//	msg.Payload = newPayload
+
 	case APP_CONTRACT_DEPLOY:
 		payload, _ := cpyMsg.Payload.(*ContractDeployPayload)
 		newPayload := ContractDeployPayload{
-			TemplateId: payload.TemplateId,
 			ContractId: payload.ContractId,
-			Args:       payload.Args,
-			EleList:    payload.EleList,
-			//ExecutionTime: payload.ExecutionTime,
+			EleNode:    payload.EleNode,
 		}
 		readSet := []ContractReadSet{}
 		for _, rs := range payload.ReadSet {
-			readSet = append(readSet, ContractReadSet{Key: rs.Key, Version: &StateVersion{Height: rs.Version.Height, TxIndex: rs.Version.TxIndex}})
+			readSet = append(readSet, ContractReadSet{Key: rs.Key, Version: &StateVersion{
+				Height: rs.Version.Height, TxIndex: rs.Version.TxIndex}})
 		}
 		writeSet := []ContractWriteSet{}
 		for _, ws := range payload.WriteSet {
@@ -118,12 +123,11 @@ func (msg *Message) CopyMessages(cpyMsg *Message) *Message {
 		payload, _ := cpyMsg.Payload.(*ContractInvokePayload)
 		newPayload := ContractInvokePayload{
 			ContractId: payload.ContractId,
-			Args:       payload.Args,
-			//ExecutionTime: payload.ExecutionTime,
 		}
 		readSet := []ContractReadSet{}
 		for _, rs := range payload.ReadSet {
-			readSet = append(readSet, ContractReadSet{Key: rs.Key, Version: &StateVersion{Height: rs.Version.Height, TxIndex: rs.Version.TxIndex}})
+			readSet = append(readSet, ContractReadSet{Key: rs.Key, Version: &StateVersion{
+				Height: rs.Version.Height, TxIndex: rs.Version.TxIndex}})
 		}
 		writeSet := []ContractWriteSet{}
 		for _, ws := range payload.WriteSet {
@@ -143,8 +147,6 @@ func (msg *Message) CopyMessages(cpyMsg *Message) *Message {
 }
 
 func (msg *Message) CompareMessages(inMsg *Message) bool {
-	//return true //todo del
-
 	if inMsg == nil || msg.App != inMsg.App {
 		return false
 	}
@@ -192,46 +194,21 @@ func (msg *Message) CompareMessages(inMsg *Message) bool {
 }
 
 type ContractWriteSet struct {
-	IsDelete bool
-	Key      string
-	Value    []byte
-	//Value interface{}
+	IsDelete   bool   `json:"is_delete"`
+	Key        string `json:"key"`
+	Value      []byte `json:"value"`
+	ContractId []byte `json:"contract_id"`
 }
 
+func NewWriteSet(key string, value []byte) *ContractWriteSet {
+	return &ContractWriteSet{Key: key, Value: value, IsDelete: false}
+}
 func ToPayloadMapValueBytes(data interface{}) []byte {
 	b, err := rlp.EncodeToBytes(data)
 	if err != nil {
 		return nil
 	}
 	return b
-}
-
-// Token exchange message and verify message
-// App: payment
-type PaymentPayload struct {
-	Inputs   []*Input  `json:"inputs"`
-	Outputs  []*Output `json:"outputs"`
-	LockTime uint32    `json:"lock_time"`
-}
-
-func (pay *PaymentPayload) IsCoinbase() bool {
-	if len(pay.Inputs) == 0 {
-		return true
-	}
-	if pay.Inputs[0].PreviousOutPoint == nil {
-		return true
-	}
-	return false
-}
-
-// NewTxOut returns a new bitcoin transaction output with the provided
-// transaction value and public key script.
-func NewTxOut(value uint64, pkScript []byte, asset *Asset) *Output {
-	return &Output{
-		Value:    value,
-		PkScript: pkScript,
-		Asset:    asset,
-	}
 }
 
 type StateVersion struct {
@@ -244,12 +221,16 @@ type ContractStateValue struct {
 }
 
 func (version *StateVersion) String() string {
-
+	if version == nil {
+		return `null`
+	}
+	if version.Height == nil {
+		return fmt.Sprintf(`StateVersion[AssetId:{null}, Height:{null},TxIdx:{%d}]`, version.TxIndex)
+	}
 	return fmt.Sprintf(
-		"StateVersion[AssetId:{%#x}, Height:{%d},IsMain:%t,TxIdx:{%d}]",
-		version.Height.AssetID,
+		"StateVersion[AssetId:{%s}, Height:{%d},TxIdx:{%d}]",
+		version.Height.AssetID.String(),
 		version.Height.Index,
-		version.Height.IsMain,
 		version.TxIndex)
 }
 
@@ -271,73 +252,61 @@ func (version *StateVersion) ParseStringKey(key string) bool {
 	return true
 }
 
-//16+8+1+4=29
+//(16+8)+4=28
 func (version *StateVersion) Bytes() []byte {
-	idx := make([]byte, 8)
-	littleEndian.PutUint64(idx, version.Height.Index)
-	b := append(version.Height.AssetID.Bytes(), idx...)
-	if version.Height.IsMain {
-		b = append(b, byte(1))
-	} else {
-		b = append(b, byte(0))
-	}
+	b := version.Height.Bytes()
 	txIdx := make([]byte, 4)
-	littleEndian.PutUint32(txIdx, version.TxIndex)
+	binary.LittleEndian.PutUint32(txIdx, version.TxIndex)
 	b = append(b, txIdx...)
 	return b[:]
 }
 func (version *StateVersion) SetBytes(b []byte) {
-	asset := AssetId{}
-	asset.SetBytes(b[:15])
-	heightIdx := littleEndian.Uint64(b[16:24])
-	isMain := b[24]
-	txIdx := littleEndian.Uint32(b[25:])
-	cidx := &ChainIndex{AssetID: asset, Index: heightIdx, IsMain: isMain == byte(1)}
+	cidx := &ChainIndex{}
+	cidx.SetBytes(b[:24])
 	version.Height = cidx
-	version.TxIndex = txIdx
+	version.TxIndex = binary.LittleEndian.Uint32(b[24:])
+}
+
+func (version *StateVersion) Equal(in *StateVersion) bool {
+	rlpA, err := rlp.EncodeToBytes(version)
+	if err != nil {
+		return false
+	}
+	rlpB, err := rlp.EncodeToBytes(in)
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(rlpA, rlpB)
+
 }
 
 const (
-	FIELD_TPL_BYTECODE  = "TplBytecode"
-	FIELD_TPL_NAME      = "TplName"
-	FIELD_TPL_PATH      = "TplPath"
-	FIELD_TPL_Memory    = "TplMemory"
 	FIELD_SPLIT_STR     = "^*^"
 	FIELD_GENESIS_ASSET = "GenesisAsset"
-	FIELD_TPL_Version   = "TplVersion"
 )
 
-type DelContractState struct {
-	IsDelete bool
-}
-
-func (delState DelContractState) Bytes() []byte {
-	data, err := rlp.EncodeToBytes(delState)
-	if err != nil {
-		return nil
-	}
-	return data
-}
-
-func (delState DelContractState) SetBytes(b []byte) error {
-	if err := rlp.DecodeBytes(b, &delState); err != nil {
-		return err
-	}
-	return nil
+type ContractError struct {
+	Code    uint32 `json:"error_code"`    // error code
+	Message string `json:"error_message"` // error data
 }
 
 //node election
 type ElectionInf struct {
-	VData     []byte      `json:"vdata"`      //vrf data, no use
-	AddrHash  common.Hash `json:"addr_hash"`  //common.Address将地址hash后，返回给请求节点
-	Proof     []byte      `json:"proof"`      //vrf proof
-	PublicKey []byte      `json:"public_key"` //alg.PublicKey, rlp not support
+	EType     byte        `json:"election_type"` //vrf type, if set to 1, it is the assignation node
+	AddrHash  common.Hash `json:"addr_hash"`     //common.Address将地址hash后，返回给请求节点
+	Proof     []byte      `json:"proof"`         //vrf proof
+	PublicKey []byte      `json:"public_key"`    //alg.PublicKey, rlp not support
+}
+
+type ElectionNode struct {
+	JuryCount uint64        `json:"jury_count"` //
+	EleList   []ElectionInf `json:"ele_list"`   //
 }
 
 type ContractReadSet struct {
-	Key     string        `json:"key"`
-	Version *StateVersion `json:"version"`
-	Value   []byte        `json:"value"`
+	Key        string        `json:"key"`
+	Version    *StateVersion `json:"version"`
+	ContractId []byte        `json:"contract_id"`
 }
 
 //请求合约信息
@@ -347,39 +316,16 @@ type InvokeInfo struct {
 	InvokeFees    *AmountAsset    `json:"invoke_fees"`    //请求交易�?
 }
 
-//请求的数�?
+//请求的数量
 type InvokeTokens struct {
 	Amount  uint64 `json:"amount"`  //数量
 	Asset   *Asset `json:"asset"`   //资产
 	Address string `json:"address"` //接收地址
 }
 
-//申请成为Mediator
-type MediatorRegisterInfo struct {
-	Address string `json:"address"`
-	Content string `json:"content"`
-	Time    int64  `json:"time"`
-}
-
-//金额和资�?
-type AmountAsset struct {
-	Amount uint64 `json:"amount"`
-	Asset  *Asset `json:"asset"`
-}
-
-func (aa *AmountAsset) String() string {
-
-	number := assetAmt2DecimalAmt(aa.Asset, aa.Amount)
-	return number.String() + aa.Asset.String()
-}
-func assetAmt2DecimalAmt(asset *Asset, amount uint64) decimal.Decimal {
-	dec := asset.GetDecimal()
-	d, _ := decimal.NewFromString(fmt.Sprintf("%d", amount))
-	for i := 0; i < int(dec); i++ {
-		d = d.Div(decimal.New(10, 0))
-	}
-
-	return d
+func (i *InvokeTokens) String() string {
+	data, _ := json.Marshal(i)
+	return string(data)
 }
 
 type TokenPayOut struct {
@@ -389,102 +335,104 @@ type TokenPayOut struct {
 	LockTime uint32
 }
 
+//用户钱包发起的合约调用申请
+type ContractInstallRequestPayload struct {
+	TplName        string        `json:"tpl_name"`
+	TplDescription string        `json:"tpl_description"`
+	Path           string        `json:"install_path"`
+	Version        string        `json:"tpl_version"`
+	Abi            string        `json:"abi"`
+	Language       string        `json:"language"`
+	AddrHash       []common.Hash `json:"addr_hash"`
+	Creator        string        `json:"creator"`
+}
+
 // Contract template deploy message
 // App: contract_template
 type ContractTplPayload struct {
-	TemplateId []byte `json:"template_id"` // contract template id
-	Name       string `json:"name"`        // contract template name
-	Path       string `json:"path"`        // contract template execute path
-	Version    string `json:"version"`     // contract template version
-	Memory     uint16 `json:"memory"`      // contract template bytecode memory size(Byte), use to compute transaction fee
-	Bytecode   []byte `json:"bytecode"`    // contract bytecode
+	TemplateId []byte        `json:"template_id"`    // contract template id
+	Size       uint16        `json:"size"`           // contract template bytecode size(Byte), use to compute transaction fee
+	ByteCode   []byte        `json:"byte_code"`      // contract bytecode
+	ErrMsg     ContractError `json:"contract_error"` // contract error message
 }
 
 // App: contract_deploy
+type ContractDeployRequestPayload struct {
+	TemplateId []byte   `json:"template_id"`
+	Args       [][]byte `json:"args"`
+	ExtData    []byte   `json:"extend_data"`
+	Timeout    uint32   `json:"timeout"`
+}
+
 type ContractDeployPayload struct {
-	TemplateId []byte             `json:"template_id"`   // contract template id
+	TemplateId []byte             `json:"template_id"`   // delete--
 	ContractId []byte             `json:"contract_id"`   // contract id
 	Name       string             `json:"name"`          // the name for contract
-	Args       [][]byte           `json:"args"`          // contract arguments list
-	EleList    []ElectionInf      `json:"election_list"` // contract jurors list
+	Args       [][]byte           `json:"args"`          // delete--
+	EleNode    ElectionNode       `json:"election_node"` // contract jurors node info
 	ReadSet    []ContractReadSet  `json:"read_set"`      // the set data of read, and value could be any type
 	WriteSet   []ContractWriteSet `json:"write_set"`     // the set data of write, and value could be any type
-	//Jury       []common.Address   `json:"jury"`          // contract jurors list
+	DuringTime uint64             `json:"during_time"`
+	ErrMsg     ContractError      `json:"contract_error"` // contract error message
 }
 
 // Contract invoke message
 // App: contract_invoke
+type ContractInvokeRequestPayload struct {
+	ContractId []byte   `json:"contract_id"` // contract id
+	Args       [][]byte `json:"args"`        // contract arguments list
+	Timeout    uint32   `json:"timeout"`
+}
+
 //如果是用户想修改自己的State信息，那么ContractId可以为空或�?0字节
 type ContractInvokePayload struct {
-	ContractId   []byte             `json:"contract_id"` // contract id
-	FunctionName string             `json:"function_name"`
-	Args         [][]byte           `json:"args"`       // contract arguments list
-	ReadSet      []ContractReadSet  `json:"read_set"`   // the set data of read, and value could be any type
-	WriteSet     []ContractWriteSet `json:"write_set"`  // the set data of write, and value could be any type
-	Payload      []byte             `json:"payload"`    // the contract execution result
-	ErrorCode    uint32             `json:"error_code"` //If contract execute error, record the error code
-	ErrorMessage string             `json:"error_message"`
+	ContractId []byte             `json:"contract_id"`    // contract id
+	Args       [][]byte           `json:"args"`           // delete--
+	ReadSet    []ContractReadSet  `json:"read_set"`       // the set data of read, and value could be any type
+	WriteSet   []ContractWriteSet `json:"write_set"`      // the set data of write, and value could be any type
+	Payload    []byte             `json:"payload"`        // the contract execution result
+	ErrMsg     ContractError      `json:"contract_error"` // contract error message
 }
 
-// App: contract_deploy
-type ContractStopPayload struct {
-	ContractId []byte             `json:"contract_id"` // contract id
-	Jury       []common.Address   `json:"jury"`        // contract jurors list
-	ReadSet    []ContractReadSet  `json:"read_set"`    // the set data of read, and value could be any type
-	WriteSet   []ContractWriteSet `json:"write_set"`   // the set data of write, and value could be any type
-}
-
-//contract invoke result
-type ContractInvokeResult struct {
-	ContractId   []byte             `json:"contract_id"` // contract id
-	RequestId    common.Hash        `json:"request_id"`
-	FunctionName string             `json:"function_name"`
-	Args         [][]byte           `json:"args"`         // contract arguments list
-	ReadSet      []ContractReadSet  `json:"read_set"`     // the set data of read, and value could be any type
-	WriteSet     []ContractWriteSet `json:"write_set"`    // the set data of write, and value could be any type
-	Payload      []byte             `json:"payload"`      // the contract execution result
-	TokenPayOut  []*TokenPayOut     `json:"token_payout"` //从合约地址付出Token
-	TokenSupply  []*TokenSupply     `json:"token_supply"` //增发Token请求产生的结果
-	TokenDefine  *TokenDefine       `json:"token_define"` //定义新Token
-}
-
-//用户钱包发起的合约调用申请
-type ContractInstallRequestPayload struct {
-	TplName string `json:"tpl_name"`
-	Path    string `json:"install_path"`
-	Version string `json:"tpl_version"`
-}
-
-type ContractDeployRequestPayload struct {
-	TplId   []byte   `json:"tpl_name"`
-	Args    [][]byte `json:"args"`
-	Timeout uint32   `json:"timeout"`
-}
-
-type ContractInvokeRequestPayload struct {
-	ContractId   []byte   `json:"contract_id"` // contract id
-	FunctionName string   `json:"function_name"`
-	Args         [][]byte `json:"args"` // contract arguments list
-	Timeout      uint32   `json:"timeout"`
-}
-
+// App: contract_stop
 type ContractStopRequestPayload struct {
 	ContractId  []byte `json:"contract_id"`
 	Txid        string `json:"transaction_id"`
 	DeleteImage bool   `json:"delete_image"`
 }
 
-// Token exchange message and verify message
-// App: config	// update global config
-//type ConfigPayload struct {
-//	ConfigSet []ContractWriteSet `json:"config_set"` // the array of global config
-//}
+type ContractStopPayload struct {
+	ContractId []byte             `json:"contract_id"`    // contract id
+	ReadSet    []ContractReadSet  `json:"read_set"`       // the set data of read, and value could be any type
+	WriteSet   []ContractWriteSet `json:"write_set"`      // the set data of write, and value could be any type
+	ErrMsg     ContractError      `json:"contract_error"` // contract error message
+}
+
+//contract invoke result
+type ContractInvokeResult struct {
+	ContractId  []byte             `json:"contract_id"` // contract id
+	RequestId   common.Hash        `json:"request_id"`
+	Args        [][]byte           `json:"args"`           // contract arguments list
+	ReadSet     []ContractReadSet  `json:"read_set"`       // the set data of read, and value could be any type
+	WriteSet    []ContractWriteSet `json:"write_set"`      // the set data of write, and value could be any type
+	Payload     []byte             `json:"payload"`        // the contract execution result
+	TokenPayOut []*TokenPayOut     `json:"token_payout"`   //从合约地址付出Token
+	TokenSupply []*TokenSupply     `json:"token_supply"`   //增发Token请求产生的结果
+	TokenDefine *TokenDefine       `json:"token_define"`   //定义新Token
+	ErrMsg      ContractError      `json:"contract_error"` // contract error message
+}
+
 type SignaturePayload struct {
 	Signatures []SignatureSet `json:"signature_set"` // the array of signature
 }
+
 type SignatureSet struct {
-	PubKey    []byte //compress public key
-	Signature []byte //
+	PubKey    []byte `json:"public_key"` //compress public key
+	Signature []byte `json:"signature"`  //
+}
+
+func (ss SignatureSet) String() string {
+	return fmt.Sprintf("SignatureSet: Pubkey[%x],Signature[%x]", ss.PubKey, ss.Signature)
 }
 
 // Token exchange message and verify message
@@ -492,7 +440,20 @@ type SignatureSet struct {
 type DataPayload struct {
 	MainData  []byte `json:"main_data"`
 	ExtraData []byte `json:"extra_data"`
+	Reference []byte `json:"reference"`
 }
+
+//一个地址对应的个人StateDB空间
+type AccountStateUpdatePayload struct {
+	WriteSet []AccountStateWriteSet `json:"write_set"`
+}
+
+type AccountStateWriteSet struct {
+	IsDelete bool   `json:"is_delete"`
+	Key      string `json:"key"`
+	Value    []byte `json:"value"`
+}
+
 type FileInfo struct {
 	UnitHash    common.Hash `json:"unit_hash"`
 	UintHeight  uint64      `json:"unit_index"`
@@ -501,56 +462,51 @@ type FileInfo struct {
 	Timestamp   uint64      `json:"timestamp"`
 	MainData    string      `json:"main_data"`
 	ExtraData   string      `json:"extra_data"`
+	Reference   string      `json:"reference"`
 }
 
-func NewPaymentPayload(inputs []*Input, outputs []*Output) *PaymentPayload {
-	return &PaymentPayload{
-		Inputs:   inputs,
-		Outputs:  outputs,
-		LockTime: defaultTxInOutAlloc,
-	}
-}
-
-func NewContractTplPayload(templateId []byte, name string, path string, version string, memory uint16, bytecode []byte) *ContractTplPayload {
+func NewContractTplPayload(templateId []byte, memory uint16, bytecode []byte, err ContractError) *ContractTplPayload {
 	return &ContractTplPayload{
 		TemplateId: templateId,
-		Name:       name,
-		Path:       path,
-		Version:    version,
-		Memory:     memory,
-		Bytecode:   bytecode,
+		Size:       memory,
+		ByteCode:   bytecode,
+		ErrMsg:     err,
 	}
 }
 
-func NewContractDeployPayload(templateid []byte, contractid []byte, name string, args [][]byte, excutiontime time.Duration,
-	jury []common.Address, elf []ElectionInf, readset []ContractReadSet, writeset []ContractWriteSet) *ContractDeployPayload {
-	return &ContractDeployPayload{
-		TemplateId: templateid,
+func NewContractDeployPayload(templateid []byte, contractid []byte, name string, args [][]byte,
+	ele *ElectionNode, readset []ContractReadSet, writeset []ContractWriteSet, err ContractError) *ContractDeployPayload {
+	payload := &ContractDeployPayload{
 		ContractId: contractid,
 		Name:       name,
-		Args:       args,
-		EleList:    elf,
 		ReadSet:    readset,
 		WriteSet:   writeset,
+		ErrMsg:     err,
+	}
+	if ele != nil {
+		payload.EleNode = *ele
+	}
+	return payload
+}
+
+func NewContractInvokePayload(contractid []byte, readset []ContractReadSet, writeset []ContractWriteSet,
+	payload []byte, err ContractError) *ContractInvokePayload {
+	return &ContractInvokePayload{
+		ContractId: contractid,
+		ReadSet:    readset,
+		WriteSet:   writeset,
+		Payload:    payload,
+		ErrMsg:     err,
 	}
 }
 
-//TokenPayOut   []*modules.TokenPayOut     `json:"token_payout"`   //从合约地址付出Token
-//	TokenSupply   []*modules.TokenSupply     `json:"token_supply"`   //增发Token请求产生的结�?
-//	TokenDefine   *modules.TokenDefine       `json:"token_define"`   //定义新Token
-func NewContractInvokePayload(contractid []byte, funcName string, args [][]byte, excutiontime time.Duration,
-	readset []ContractReadSet, writeset []ContractWriteSet, payload []byte) *ContractInvokePayload {
-	return &ContractInvokePayload{
-		ContractId:   contractid,
-		FunctionName: funcName,
-		Args:         args,
-		//ExecutionTime: excutiontime,
-		ReadSet:  readset,
-		WriteSet: writeset,
-		Payload:  payload,
-		//TokenPayOut:   tokenPayOut,
-		//TokenSupply:   tokenSupply,
-		//TokenDefine:   tokenDefine,
+func NewContractStopPayload(contractid []byte, readset []ContractReadSet, writeset []ContractWriteSet,
+	err ContractError) *ContractStopPayload {
+	return &ContractStopPayload{
+		ContractId: contractid,
+		ReadSet:    readset,
+		WriteSet:   writeset,
+		ErrMsg:     err,
 	}
 }
 
@@ -558,7 +514,7 @@ func (a *ElectionInf) Equal(b *ElectionInf) bool {
 	if b == nil {
 		return false
 	}
-	if !bytes.Equal(a.VData, b.VData) || !bytes.Equal(a.Proof, b.Proof) || !bytes.Equal(a.PublicKey, b.PublicKey) {
+	if !bytes.Equal(a.Proof, b.Proof) || !bytes.Equal(a.PublicKey, b.PublicKey) {
 		return false
 	}
 	if !bytes.Equal(a.AddrHash[:], b.AddrHash[:]) {
@@ -571,11 +527,18 @@ func (a *ContractReadSet) Equal(b *ContractReadSet) bool {
 	if b == nil {
 		return false
 	}
-	if !strings.EqualFold(a.Key, b.Key) || !bytes.Equal(a.Value, b.Value) {
+	if !strings.EqualFold(a.Key, b.Key) || !bytes.Equal(a.ContractId, b.ContractId) {
 		return false
 	}
 	if a.Version != nil && b.Version != nil {
 		if a.Version.TxIndex != b.Version.TxIndex || a.Version.Height != b.Version.Height {
+			return false
+		}
+		if a.Version.Height != nil {
+			if !a.Version.Height.Equal(b.Version.Height) {
+				return false
+			}
+		} else if b.Version.Height != nil {
 			return false
 		}
 	} else if a.Version != b.Version {
@@ -596,195 +559,106 @@ func (a *ContractWriteSet) Equal(b *ContractWriteSet) bool {
 }
 
 func (a *ContractTplPayload) Equal(b *ContractTplPayload) bool {
-	if b == nil {
+	rlpA, err := rlp.EncodeToBytes(a)
+	if err != nil {
 		return false
 	}
-	if bytes.Equal(a.TemplateId, b.TemplateId) && strings.EqualFold(a.Name, b.Name) && strings.EqualFold(a.Path, b.Path) &&
-		strings.EqualFold(a.Version, b.Version) && a.Memory == b.Memory && bytes.Equal(a.Bytecode, b.Bytecode) {
-		return true
+	rlpB, err := rlp.EncodeToBytes(b)
+	if err != nil {
+		return false
 	}
-	return false
+	return bytes.Equal(rlpA, rlpB)
+
 }
 
 func (a *ContractDeployPayload) Equal(b *ContractDeployPayload) bool {
-	if b == nil {
+	rlpA, err := rlp.EncodeToBytes(a)
+	if err != nil {
 		return false
 	}
-	if !bytes.Equal(a.TemplateId, b.TemplateId) || !bytes.Equal(a.ContractId, b.ContractId) || !strings.EqualFold(a.Name, b.Name) {
+	rlpB, err := rlp.EncodeToBytes(b)
+	if err != nil {
 		return false
 	}
-	if len(a.Args) == len(b.Args) {
-		for i := 0; i < len(a.Args); i++ {
-			if !bytes.Equal(a.Args[i], b.Args[i]) {
-				return false
-			}
-		}
-	} else {
-		return false
-	}
-	//if len(a.Jury) == len(b.Jury) {
-	//	for i := 0; i < len(a.Jury); i++ {
-	//		if !a.Jury[i].Equal(b.Jury[i]) {
-	//			return false
-	//		}
-	//	}
-	//} else {
-	//	return false
-	//}
-	if len(a.EleList) == len(b.EleList) {
-		for i := 0; i < len(a.EleList); i++ {
-			if !a.EleList[i].Equal(&b.EleList[i]) {
-				return false
-			}
-		}
-	} else {
-		return false
-	}
-	if len(a.ReadSet) == len(b.ReadSet) {
-		for i := 0; i < len(a.ReadSet); i++ {
-			a.ReadSet[i].Equal(&b.ReadSet[i])
-		}
-	} else {
-		return false
-	}
-	if len(a.WriteSet) == len(b.WriteSet) {
-		for i := 0; i < len(a.WriteSet); i++ {
-			a.WriteSet[i].Equal(&b.WriteSet[i])
-		}
-	} else {
-		return false
-	}
-	return true
+	return bytes.Equal(rlpA, rlpB)
+
 }
 
 func (a *ContractInvokePayload) Equal(b *ContractInvokePayload) bool {
-	if b == nil {
+	rlpA, err := rlp.EncodeToBytes(a)
+	if err != nil {
 		return false
 	}
-	if !bytes.Equal(a.ContractId, b.ContractId) || !strings.EqualFold(a.FunctionName, b.FunctionName) || !bytes.Equal(a.Payload, b.Payload) {
+	rlpB, err := rlp.EncodeToBytes(b)
+	if err != nil {
 		return false
 	}
-	if len(a.Args) == len(b.Args) {
-		for i := 0; i < len(a.Args); i++ {
-			if !bytes.Equal(a.Args[i], b.Args[i]) {
-				return false
-			}
-		}
-	} else {
-		return false
-	}
-	if len(a.ReadSet) == len(b.ReadSet) {
-		for i := 0; i < len(a.ReadSet); i++ {
-			a.ReadSet[i].Equal(&b.ReadSet[i])
-		}
-	} else {
-		return false
-	}
-	if len(a.WriteSet) == len(b.WriteSet) {
-		for i := 0; i < len(a.WriteSet); i++ {
-			a.WriteSet[i].Equal(&b.WriteSet[i])
-		}
-	} else {
-		return false
-	}
-	return true
+	return bytes.Equal(rlpA, rlpB)
 }
 
 func (a *ContractStopPayload) Equal(b *ContractStopPayload) bool {
-	if b == nil {
+	rlpA, err := rlp.EncodeToBytes(a)
+	if err != nil {
 		return false
 	}
-	if !bytes.Equal(a.ContractId, b.ContractId) {
+	rlpB, err := rlp.EncodeToBytes(b)
+	if err != nil {
 		return false
 	}
-	if len(a.Jury) == len(b.Jury) {
-		for i := 0; i < len(a.Jury); i++ {
-			if !a.Jury[i].Equal(b.Jury[i]) {
-				return false
-			}
-		}
-	} else {
-		return false
-	}
-	if len(a.ReadSet) == len(b.ReadSet) {
-		for i := 0; i < len(a.ReadSet); i++ {
-			a.ReadSet[i].Equal(&b.ReadSet[i])
-		}
-	} else {
-		return false
-	}
-	if len(a.WriteSet) == len(b.WriteSet) {
-		for i := 0; i < len(a.WriteSet); i++ {
-			a.WriteSet[i].Equal(&b.WriteSet[i])
-		}
-	} else {
-		return false
-	}
-	return true
+	return bytes.Equal(rlpA, rlpB)
+
 }
 
 func (a *ContractInstallRequestPayload) Equal(b *ContractInstallRequestPayload) bool {
-	if b == nil {
+	rlpA, err := rlp.EncodeToBytes(a)
+	if err != nil {
 		return false
 	}
-	if !strings.EqualFold(a.TplName, b.TplName) || !strings.EqualFold(a.Path, b.Path) || !strings.EqualFold(a.Version, b.Version) {
+	rlpB, err := rlp.EncodeToBytes(b)
+	if err != nil {
 		return false
 	}
-	return true
+	return bytes.Equal(rlpA, rlpB)
+
 }
 
 func (a *ContractDeployRequestPayload) Equal(b *ContractDeployRequestPayload) bool {
-	if b == nil {
+	rlpA, err := rlp.EncodeToBytes(a)
+	if err != nil {
 		return false
 	}
-	if !bytes.Equal(a.TplId, b.TplId) || a.Timeout != b.Timeout {
+	rlpB, err := rlp.EncodeToBytes(b)
+	if err != nil {
 		return false
 	}
-	if len(a.Args) == len(b.Args) {
-		for i := 0; i < len(a.Args); i++ {
-			if !bytes.Equal(a.Args[i], b.Args[i]) {
-				return false
-			}
-		}
-	} else {
-		return false
-	}
-	return true
+	return bytes.Equal(rlpA, rlpB)
+
 }
 
 func (a *ContractInvokeRequestPayload) Equal(b *ContractInvokeRequestPayload) bool {
-	if b == nil {
+	rlpA, err := rlp.EncodeToBytes(a)
+	if err != nil {
 		return false
 	}
-	if !bytes.Equal(a.ContractId, b.ContractId) || !strings.EqualFold(a.FunctionName, b.FunctionName) || a.Timeout != b.Timeout {
+	rlpB, err := rlp.EncodeToBytes(b)
+	if err != nil {
 		return false
 	}
-	if len(a.Args) == len(b.Args) {
-		for i := 0; i < len(a.Args); i++ {
-			if !bytes.Equal(a.Args[i], b.Args[i]) {
-				return false
-			}
-		}
-	} else {
-		return false
-	}
-	return true
+	return bytes.Equal(rlpA, rlpB)
+
 }
 
 func (a *ContractStopRequestPayload) Equal(b *ContractStopRequestPayload) bool {
-	if b == nil {
+	rlpA, err := rlp.EncodeToBytes(a)
+	if err != nil {
 		return false
 	}
-	if !bytes.Equal(a.ContractId, b.ContractId) || !strings.EqualFold(a.Txid, b.Txid) || a.DeleteImage != b.DeleteImage {
+	rlpB, err := rlp.EncodeToBytes(b)
+	if err != nil {
 		return false
 	}
-	return true
-}
+	return bytes.Equal(rlpA, rlpB)
 
-//foundation modify sys param
-type FoundModify struct {
-	Key   string
-	Value string
 }
 
 type SysTokenIDInfo struct {
@@ -804,9 +678,4 @@ type SysSupportResult struct {
 type SysVoteResult struct {
 	SelectOption string
 	Num          uint64
-}
-
-type CertInfo struct {
-	NeedCert bool
-	Certid   []byte // should be big.Int byte
 }

@@ -87,7 +87,6 @@ func newTestProtocolManager(mode downloader.SyncMode, blocks int, idag dag.IDag,
 	//producer := new(mediatorplugin.MediatorPlugin)
 	index0 := &modules.ChainIndex{
 		modules.PTNCOIN,
-		true,
 		0,
 	}
 	genesisUint, _ := idag.GetUnitByNumber(index0)
@@ -99,7 +98,7 @@ func newTestProtocolManager(mode downloader.SyncMode, blocks int, idag dag.IDag,
 	//pm.SetForTest()
 	config := p2p.DefaultConfig
 	running := &p2p.Server{Config: config}
-	pm.Start(running, 1000)
+	pm.Start(running, 1000, nil)
 	return pm, memdb, nil
 }
 
@@ -117,9 +116,10 @@ func newTestProtocolManagerMust(t *testing.T, mode downloader.SyncMode, blocks i
 
 // testTxPool is a fake, helper transaction pool for testing purposes
 type testTxPool struct {
-	txFeed event.Feed
-	pool   []*modules.Transaction        // Collection of all transactions
-	added  chan<- []*modules.Transaction // Notification channel for new transactions
+	txFeed     event.Feed
+	pool       []*modules.Transaction        // Collection of all transactions
+	added      chan<- []*modules.Transaction // Notification channel for new transactions
+	sequenPool *modules.SequeueTxPoolTxs
 
 	lock sync.RWMutex // Protects the transaction pool
 }
@@ -131,18 +131,18 @@ func (p *testTxPool) OutPointIsSpend(outPoint *modules.OutPoint) (bool, error) {
 	return true, nil
 }
 
-func (p *testTxPool) AddLocal(tx *modules.TxPoolTransaction) error {
+func (p *testTxPool) AddLocal(tx *modules.Transaction) error {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
-	p.pool = append(p.pool, tx.Tx)
+	p.pool = append(p.pool, tx)
 	if p.added != nil {
 		p.added <- p.pool
 	}
 	return nil
 }
 
-func (p *testTxPool) AddLocals(txs []*modules.TxPoolTransaction) []error {
+func (p *testTxPool) AddLocals(txs []*modules.Transaction) []error {
 	errs := make([]error, 0)
 	for _, tx := range txs {
 		errs = append(errs, p.AddLocal(tx))
@@ -183,8 +183,22 @@ func (p *testTxPool) AddRemotes(txs []*modules.Transaction) []error {
 	}
 	return make([]error, len(txs))
 }
+func (p *testTxPool) AddSequenTx(tx *modules.Transaction) error {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+	p.sequenPool.Add(txspool.TxtoTxpoolTx(tx))
+	return nil
+}
+func (p *testTxPool) AddSequenTxs(txs []*modules.Transaction) error {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+	for _, tx := range txs {
+		p.sequenPool.Add(txspool.TxtoTxpoolTx(tx))
+	}
+	return nil
+}
 
-func (p *testTxPool) Content() (map[common.Hash]*modules.Transaction, map[common.Hash]*modules.Transaction) {
+func (p *testTxPool) Content() (map[common.Hash]*modules.TxPoolTransaction, map[common.Hash]*modules.TxPoolTransaction) {
 	return nil, nil
 }
 
@@ -202,7 +216,7 @@ func (p *testTxPool) GetNonce(hash common.Hash) uint64 {
 func (p *testTxPool) GetUtxoEntry(outpoint *modules.OutPoint) (*modules.Utxo, error) {
 	return nil, nil
 }
-func (p *testTxPool) GetSortedTxs(hash common.Hash) ([]*modules.TxPoolTransaction, common.StorageSize) {
+func (p *testTxPool) GetSortedTxs(hash common.Hash, index uint64) ([]*modules.TxPoolTransaction, common.StorageSize) {
 	return nil, 0
 }
 func (p *testTxPool) SendStoredTxs(hashs []common.Hash) error {
@@ -229,6 +243,12 @@ func (p *testTxPool) Pending() (map[common.Hash][]*modules.TxPoolTransaction, er
 	//}
 	return batches, nil
 }
+func (p *testTxPool) Queued() ([]*modules.TxPoolTransaction, error) {
+	p.lock.RLock()
+	defer p.lock.RUnlock()
+	batches := make([]*modules.TxPoolTransaction, 0)
+	return batches, nil
+}
 
 func (p *testTxPool) SubscribeTxPreEvent(ch chan<- modules.TxPreEvent) event.Subscription {
 	return p.txFeed.Subscribe(ch)
@@ -252,7 +272,7 @@ func (p *testTxPool) DiscardTxs(hashs []common.Hash) error {
 func (p *testTxPool) ResetPendingTxs(txs []*modules.Transaction) error {
 	return nil
 }
-func (p *testTxPool) SetPendingTxs(unit_hash common.Hash, txs []*modules.Transaction) error {
+func (p *testTxPool) SetPendingTxs(unit_hash common.Hash, num uint64, txs []*modules.Transaction) error {
 	return nil
 }
 
@@ -314,8 +334,9 @@ func newTestPeer(name string, version int, pm *ProtocolManager, shake bool, dag 
 			//	0,
 			//}
 			//genesis = pm.dag.GetUnitByNumber(number)
-			head  = pm.dag.CurrentHeader(modules.PTNCOIN)
-			index = head.Number
+			head   = pm.dag.CurrentHeader(modules.PTNCOIN)
+			index  = head.Number
+			stable = pm.dag.GetStableChainIndex(modules.PTNCOIN)
 		)
 		fmt.Println("==========================================index:", index.Index)
 		//fmt.Println("	if shake {===》》》",td)
@@ -324,20 +345,20 @@ func newTestPeer(name string, version int, pm *ProtocolManager, shake bool, dag 
 		//if err != nil {
 		//	fmt.Println("GetGenesisUnit===error:=", err)
 		//}
-		tp.handshake(nil, index, head.Hash(), pm.genesis.Hash())
+		tp.handshake(nil, index, stable, head.Hash(), pm.genesis.Hash())
 	}
 	return tp, errc
 }
 
 // handshake simulates a trivial handshake that expects the same state from the
 // remote side as we are simulating locally.
-func (p *testPeer) handshake(t *testing.T, index *modules.ChainIndex, head common.Hash, genesis common.Hash) {
+func (p *testPeer) handshake(t *testing.T, index, stalbe *modules.ChainIndex, head common.Hash, genesis common.Hash) {
 	msg := &statusData{
 		ProtocolVersion: uint32(p.version),
 		NetworkId:       DefaultConfig.NetworkId,
 		Index:           index,
 		GenesisUnit:     genesis,
-		//Mediator:        false,
+		//StableIndex:     stalbe,
 	}
 	if err := p2p.ExpectMsg(p.app, StatusMsg, msg); err != nil {
 		//log.Fatalf("status recv: %v", err)
@@ -354,7 +375,7 @@ func (p *testPeer) close() {
 }
 
 func MakeDags(Memdb ptndb.Database, unitAccount int) (*dag.Dag, error) {
-	dag, _ := dag.NewDagForTest(Memdb, nil)
+	dag, _ := dag.NewDagForTest(Memdb)
 	genesisUnit := newGenesisForTest(dag.Db)
 	newDag(dag.Db, genesisUnit, unitAccount)
 	return dag, nil
@@ -362,7 +383,7 @@ func MakeDags(Memdb ptndb.Database, unitAccount int) (*dag.Dag, error) {
 func unitForTest(index int) *modules.Unit {
 	header := modules.NewHeader([]common.Hash{}, 1, []byte{})
 	header.Number.AssetID = modules.PTNCOIN
-	header.Number.IsMain = true
+	//header.Number.IsMain = true
 	header.Number.Index = uint64(index)
 	header.Authors = modules.Authentifier{[]byte{}, []byte{}}
 	header.GroupSign = []byte{}
@@ -378,7 +399,7 @@ func unitForTest(index int) *modules.Unit {
 func newGenesisForTest(db ptndb.Database) *modules.Unit {
 	header := modules.NewHeader([]common.Hash{}, 1, []byte{})
 	header.Number.AssetID = modules.PTNCOIN
-	header.Number.IsMain = true
+	//header.Number.IsMain = true
 	header.Number.Index = 0
 	header.Authors = modules.Authentifier{[]byte{}, []byte{}}
 	header.GroupSign = []byte{}
@@ -401,7 +422,7 @@ func newDag(memdb ptndb.Database, gunit *modules.Unit, number int) (modules.Unit
 	for i := 0; i < number; i++ {
 		header := modules.NewHeader([]common.Hash{par.UnitHash}, 1, []byte{})
 		header.Number.AssetID = par.UnitHeader.Number.AssetID
-		header.Number.IsMain = par.UnitHeader.Number.IsMain
+		//header.Number.IsMain = par.UnitHeader.Number.IsMain
 		header.Number.Index = par.UnitHeader.Number.Index + 1
 		header.Authors = modules.Authentifier{[]byte{}, []byte{}}
 		header.GroupSign = []byte{}
@@ -450,7 +471,7 @@ func CreateCoinbase() (*modules.Transaction, error) {
 	//}
 	asset := modules.NewPTNAsset()
 	// setp1. create P2PKH script
-	script := tokenengine.GenerateP2PKHLockScript(addr.Bytes())
+	script := tokenengine.Instance.GenerateP2PKHLockScript(addr.Bytes())
 	// step. compute total income
 	totalIncome := int64(100000000) + int64(100000000)
 	// step2. create payload

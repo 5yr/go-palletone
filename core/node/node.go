@@ -26,16 +26,19 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/palletone/go-palletone/common"
 	"github.com/palletone/go-palletone/common/event"
 	"github.com/palletone/go-palletone/common/log"
 	"github.com/palletone/go-palletone/common/p2p"
 	"github.com/palletone/go-palletone/common/ptndb"
 	"github.com/palletone/go-palletone/common/rpc"
+	"github.com/palletone/go-palletone/configure"
 	"github.com/palletone/go-palletone/core/accounts"
 	"github.com/palletone/go-palletone/core/accounts/keystore"
+	"github.com/palletone/go-palletone/dag/palletcache"
 	"github.com/palletone/go-palletone/dag/storage"
 	"github.com/palletone/go-palletone/internal/debug"
-	"github.com/prometheus/prometheus/util/flock"
+	flock "github.com/prometheus/tsdb/fileutil"
 )
 
 // Node is a container on which services can be registered.
@@ -45,27 +48,19 @@ import (
 // 一个典型的node就是一个p2p的节点。根据节点的类型，运行了不同p2p网络协议，
 // 运行了不同的业务层协议(以区别网络层协议。 参考p2p peer中的Protocol接口)。
 type Node struct {
-	// 服务之间的事件锁
 	eventmux *event.TypeMux    // Event multiplexer used between the services of a stack
 	config   *Config           // 节点的配置信息，副本
 	accman   *accounts.Manager // 账户管理器
 
-	// 临时的 Keystore 目录， 当 node.stop() 时，即 node 进程结束时移除
-	ephemeralKeystore string // if non-empty, the key directory that will be removed by Stop
-	// 实例化目录锁，防止并发使用实例目录
-	instanceDirLock flock.Releaser // prevents concurrent use of instance directory
+	ephemeralKeystore string         // if non-empty, the key directory that will be removed by Stop
+	instanceDirLock   flock.Releaser // prevents concurrent use of instance directory
 
-	// --- P2P 相关对象 -- Start
 	serverConfig p2p.Config
 	server       *p2p.Server // Currently running P2P networking layer
-	// --- P2P 相关对象 -- End
+	corsserver   *p2p.Server
 
-	// --- 服务相关对象 -- Start
-	// 函数指针数组，保存所有注册Service的构造函数
-	serviceFuncs []ServiceConstructor // Service constructors (in dependency order)
-	// 当前节点的所有service ，按type分类保存
-	services map[reflect.Type]Service // Currently running services
-	// --- 服务相关对象 -- End
+	serviceFuncs []ServiceConstructor     // Service constructors (in dependency order)
+	services     map[reflect.Type]Service // Currently running services
 
 	// --- RPC 相关对象 -- Start
 	// RPC 提供的 API
@@ -98,12 +93,12 @@ type Node struct {
 	// --- RPC 相关对象 -- End
 
 	// 节点的等待终止通知的channel, node.New()时不创建，node.Start()时创建
-	stop chan struct{} // Channel to wait for termination notifications
-	lock sync.RWMutex
-
+	stop    chan struct{} // Channel to wait for termination notifications
+	lock    sync.RWMutex
+	CacheDb palletcache.ICache // global cache for use by other modules
 	//log log.ILogger
 	//for genesis 2018-8-14
-	dbpath string
+	//dbpath string
 }
 
 // New creates a new P2P node, ready for protocol registration.
@@ -172,14 +167,10 @@ func (n *Node) Register(constructor ServiceConstructor) error {
 // Start create a live P2P node and starts running it.
 // 启动P2P服务，并且依次启动Register的各个serviceFuncs相关服务。
 func (n *Node) Start() error {
-	// 加锁
 	n.lock.Lock()
 	defer n.lock.Unlock()
-	//if n.log == nil {
-	//	n.log = &log.NothingLogger{}
-	//}
+
 	// Short circuit if the node's already running
-	// 判断是否已经运行
 	if n.server != nil {
 		return ErrNodeRunning
 	}
@@ -190,37 +181,33 @@ func (n *Node) Start() error {
 
 	// Initialize the p2p server. This creates the node key and
 	// discovery databases.
-	// 1. 创建 P2P server
-	// 初始化P2P server配置, 用于跟网络中的其他节点建立联系
 	n.serverConfig = n.config.P2P
 	n.serverConfig.PrivateKey = n.config.NodeKey()
 	n.serverConfig.Name = n.config.NodeName()
-	//n.serverConfig.Logger = n.log
-	// 配置固定的节点
+
 	if n.serverConfig.StaticNodes == nil {
 		n.serverConfig.StaticNodes = n.config.StaticNodes()
 	}
-	// 配置信任的节点
+
 	if n.serverConfig.TrustedNodes == nil {
 		n.serverConfig.TrustedNodes = n.config.TrustedNodes()
 	}
 	if n.serverConfig.NodeDatabase == "" {
 		n.serverConfig.NodeDatabase = n.config.NodeDB()
 	}
-	// 用配置创建了一个p2p.Server实例
+
+	corss := &p2p.Server{Config: p2p.GetCorsConfig(n.serverConfig)}
+
 	running := &p2p.Server{Config: n.serverConfig}
 	log.Info("Starting peer-to-peer node", "instance", n.serverConfig.Name)
 
 	// Otherwise copy and specialize the P2P configuration
 	services := make(map[reflect.Type]Service)
-	// 2. 创建 Service
-	// 遍历所有的serviceFuncs, 也就是之前注册的所有Service的构造函数列表
 	for _, constructor := range n.serviceFuncs {
 		// Create a new context for the particular service
 		// 为每个service 分别新建一个ServiceContext 结构
 		ctx := &ServiceContext{
-			config: n.config,
-			//记录之前的所有serviceFuncs 的kind，service，方便其他service使用
+			config:         n.config,
 			services:       make(map[reflect.Type]Service),
 			EventMux:       n.eventmux,
 			AccountManager: n.accman,
@@ -230,7 +217,6 @@ func (n *Node) Start() error {
 			ctx.services[kind] = s
 		}
 		// Construct and save the service
-		// 构建和保存所有的 service, 即调用所有 Service 的匿名 Constructor 函数
 		service, err := constructor(ctx)
 		if err != nil {
 			return err
@@ -244,52 +230,66 @@ func (n *Node) Start() error {
 	}
 
 	// Gather the protocols and start the freshly assembled P2P server
-	// 3. 启动P2P server
-	// 收集所有的这些服务的协议, 为后面启动协议做准备
 	for _, service := range services {
 		running.Protocols = append(running.Protocols, service.Protocols()...)
+		corss.Protocols = append(corss.Protocols, service.CorsProtocols()...)
+
+		if !common.EmptyHash(service.GenesisHash()) && len(configure.GenesisHash) == 0 {
+			log.Debug("Node Start", "service.GenesisHash", service.GenesisHash())
+			configure.GenesisHash = service.GenesisHash().Bytes()
+		}
+
 	}
-	// 启动 p2p.Server ，所有的service的启动都需要 p2p.Server 作为参数。
-	// P2P server会绑定一个UDP端口和一个TCP端口，端口号是相同的（默认30303）。
-	// UDP端口主要用于结点发现，TCP端口主要用于业务数据传输，基于RLPx加密传输协议。
+	log.Debug("Node Start", "len(running.Protocols)", len(running.Protocols), "len(corss.Protocols)", len(corss.Protocols))
+
+	//for /*kind*/ _, service := range services {
+	//	if pallet, ok := service.(*ptn.PalletOne); ok {
+	//		pallet.Dag().GetGenesisUnit()
+	//		if unit, err := pallet.Dag().GetGenesisUnit(); err != nil {
+	//			log.Debug("===GetGenesisUnit===", "err", err)
+	//		} else {
+	//			log.Debug("===GetGenesisUnit===", "genesis hash", unit.Hash())
+	//		}
+	//	}
+	//}
+
+	if err := corss.Start(); err != nil {
+		return convertFileLockError(err)
+	}
+
 	if err := running.Start(); err != nil {
 		return convertFileLockError(err)
 	}
 
 	// Start each of the services
-	// 4. 启动Service
 	started := []reflect.Type{}
-	// 启动所有刚才创建的服务，依次调用每个Service的Start()方法， 如果出错就stop之前所有的服务并返回错误
 	for kind, service := range services {
 		// Start the next service, stopping all previous upon failure
-		if err := service.Start(running); err != nil {
+		if err := service.Start(running, corss); err != nil {
 			for _, kind := range started {
 				services[kind].Stop()
 			}
 			running.Stop()
-
+			corss.Stop()
 			return err
 		}
 		// Mark the service started for potential cleanup
-		// 把启动的Service的类型存储到started表中
 		started = append(started, kind)
 	}
 
 	// Lastly start the configured RPC interfaces
-	// 5. 启动RPC server; RPC即远程调用接口，也就是Service对外暴露出来的API。
-	// 启动节点的所有RPC服务，开启监听端口，包括HTTPS， websocket接口
 	if err := n.startRPC(services); err != nil {
 		for _, service := range services {
 			service.Stop()
 		}
 		running.Stop()
+		corss.Stop()
 		return err
 	}
 	// Finish initializing the startup
-	// 记录当前节点拥有的服务列表到services上面， 设置节点停止的管道用于通信。
 	n.services = services
 	n.server = running
-	// 设置节点停止的管道, 用于node停止时的通信。
+	n.corsserver = corss
 	n.stop = make(chan struct{})
 
 	return nil
@@ -306,7 +306,7 @@ func (n *Node) openDataDir() error {
 	}
 	// Lock the instance directory to prevent concurrent use by another instance as well as
 	// accidental use of the instance directory as a database.
-	release, _, err := flock.New(filepath.Join(instdir, "LOCK"))
+	release, _, err := flock.Flock(filepath.Join(instdir, "LOCK"))
 	if err != nil {
 		return convertFileLockError(err)
 	}
@@ -342,7 +342,8 @@ func (n *Node) startRPC(services map[reflect.Type]Service) error {
 		return err
 	}
 	// 3. 启动 HTTP，用于 HTTP 的交互通信
-	if err := n.startHTTP(n.httpEndpoint, apis, n.config.HTTPModules, n.config.HTTPCors, n.config.HTTPVirtualHosts); err != nil {
+	if err := n.startHTTP(n.httpEndpoint, apis, n.config.HTTPModules, n.config.HTTPCors,
+		n.config.HTTPVirtualHosts); err != nil {
 		log.Error("startRPC startHTTP err:", err.Error())
 		n.stopIPC()
 		n.stopInProc()
@@ -426,7 +427,8 @@ func (n *Node) startHTTP(endpoint string, apis []rpc.API, modules []string, cors
 		log.Info("HTTP endpoint StartHTTPEndpoint err:", err)
 		return err
 	}
-	log.Info("HTTP endpoint opened", "url", fmt.Sprintf("http://%s", endpoint), "cors", strings.Join(cors, ","), "vhosts", strings.Join(vhosts, ","))
+	log.Info("HTTP endpoint opened", "url", fmt.Sprintf("http://%s", endpoint), "cors",
+		strings.Join(cors, ","), "vhosts", strings.Join(vhosts, ","))
 	// All listeners booted successfully
 	n.httpEndpoint = endpoint
 	n.httpListener = listener
@@ -506,6 +508,9 @@ func (n *Node) Stop() error {
 			failure.Services[kind] = err
 		}
 	}
+
+	n.corsserver.Stop()
+	n.corsserver = nil
 	n.server.Stop()
 	n.services = nil
 	n.server = nil
@@ -541,7 +546,7 @@ func (n *Node) Stop() error {
 // 让主线程进入阻塞状态，保持进程不退出，直到从channel中收到stop消息。
 func (n *Node) Wait() {
 	n.lock.RLock()
-	if n.server == nil {
+	if n.server == nil && n.corsserver == nil {
 		n.lock.RUnlock()
 		return
 	}
@@ -593,6 +598,10 @@ func (n *Node) Server() *p2p.Server {
 	defer n.lock.RUnlock()
 
 	return n.server
+}
+
+func (n *Node) CorsServer() *p2p.Server {
+	return n.corsserver
 }
 
 // Service retrieves a currently running service registered of a specific type.
@@ -711,11 +720,3 @@ func (n *Node) apis() []rpc.API {
 func (n *Node) GetKeyStore() *keystore.KeyStore {
 	return n.AccountManager().Backends(keystore.KeyStoreType)[0].(*keystore.KeyStore)
 }
-
-//func (n *Node) SetDbPath(path string) {
-//	n.dbpath = path
-//}
-//
-//func (n *Node) GetDbPath() string {
-//	return n.dbpath
-//}

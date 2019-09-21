@@ -18,6 +18,7 @@
  *
  */
 package certficate
+
 //
 //type TestCertRpc struct {
 //	Jsonrpc string `json:"jsonrpc"`
@@ -28,6 +29,7 @@ package certficate
 //
 //
 //func TestGenCert(t *testing.T) {
+//    addr := "P1PosMZZjMaB1VTR6jayWHUtEkhS87A7N3u"
 //
 //	certinfo := NewCertInfo("P15dtShJp7FpdgxCqT6RwZGKdfSSdkRk7GQ", "lkk", "HiPalletone", "user", "gptn.mediator1", true)
 //	cainfo := CertInfo2Cainfo(*certinfo)
@@ -85,7 +87,7 @@ package certficate
 //   t.Log(string(crlPem))
 //	params := TestCertRpc{}
 //	params.Jsonrpc = "2.0"
-//	params.Methond = "ptn_ccinvoketx"
+//	params.Methond = "contract_ccinvoketx"
 //	params.Id = 1
 //	form := "P1CdJcmn4J7tUwbJpUNpML4XQ3F2nckJgiX"
 //	to := "P1CdJcmn4J7tUwbJpUNpML4XQ3F2nckJgiX"
@@ -130,7 +132,7 @@ package certficate
 //
 //	params := TestCertRpc{}
 //	params.Jsonrpc = "2.0"
-//	params.Methond = "ptn_ccquery"
+//	params.Methond = "contract_ccquery"
 //	params.Id = 1
 //	contractid := syscontract.DigitalIdentityContractAddress.String()
 //	//method1 := []string{"P15UfoQzo93aSM3R2rDVHemiDJoMKRSLoaD","P15UfoQzo93aSM3R2rDVHemiDJoMKRSLoaD","100","1","PCGTta3M4t3yXu8uRgkKvaWd2d8DRv2vsEk"}

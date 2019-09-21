@@ -22,6 +22,8 @@ package modules
 
 import (
 	"encoding/json"
+	"fmt"
+	"math/big"
 	"strconv"
 
 	"github.com/palletone/go-palletone/dag/errors"
@@ -47,14 +49,14 @@ type idxTextPayload struct {
 	*DataPayload
 }
 
-type idxMediatorCreateOperation struct {
-	Index int
-	*MediatorCreateOperation
-}
+//type idxMediatorCreateOperation struct {
+//	Index int
+//	*MediatorCreateOperation
+//}
 
 type idxAccountUpdateOperation struct {
 	Index int
-	*AccountUpdateOperation
+	*AccountStateUpdatePayload
 }
 
 //install
@@ -103,12 +105,14 @@ type idxContractStopPayload struct {
 
 type txJsonTemp struct {
 	MsgCount int
+	CertId   string
+	Illegal  bool
 	Payment  []*idxPaymentPayload
 	//Config                  []*idxConfigPayload
-	Text                    []*idxTextPayload
-	MediatorCreateOperation []*idxMediatorCreateOperation
-	AccountUpdateOperation  []*idxAccountUpdateOperation
-	Signature               []*idxSignaturePayload
+	Text []*idxTextPayload
+	//MediatorCreateOperation []*idxMediatorCreateOperation
+	AccountUpdateOperation []*idxAccountUpdateOperation
+	Signature              []*idxSignaturePayload
 
 	ContractInstallRequest []*idxContractInstallRequestPayload
 	ContractDeployRequest  []*idxContractDeployRequestPayload
@@ -122,54 +126,57 @@ type txJsonTemp struct {
 }
 
 func tx2JsonTemp(tx *Transaction) (*txJsonTemp, error) {
-	temp := &txJsonTemp{MsgCount: len(tx.TxMessages)}
+	intCertID := new(big.Int).SetBytes(tx.CertId)
+	temp := &txJsonTemp{MsgCount: len(tx.TxMessages), CertId: intCertID.String(), Illegal: tx.Illegal}
 	for idx, msg := range tx.TxMessages {
 		if msg.App == APP_PAYMENT {
-			temp.Payment = append(temp.Payment, &idxPaymentPayload{Index: idx, PaymentPayload: msg.Payload.(*PaymentPayload)})
+			temp.Payment = append(temp.Payment, &idxPaymentPayload{
+				Index: idx, PaymentPayload: msg.Payload.(*PaymentPayload)})
 		} else if msg.App == APP_CONTRACT_INVOKE {
-			temp.ContractInvoke = append(temp.ContractInvoke, &idxContractInvokePayload{Index: idx, ContractInvokePayload: msg.Payload.(*ContractInvokePayload)})
+			temp.ContractInvoke = append(temp.ContractInvoke, &idxContractInvokePayload{
+				Index: idx, ContractInvokePayload: msg.Payload.(*ContractInvokePayload)})
 		} else if msg.App == APP_CONTRACT_TPL {
-			temp.ContractTpl = append(temp.ContractTpl, &idxContractTplPayload{Index: idx, ContractTplPayload: msg.Payload.(*ContractTplPayload)})
+			temp.ContractTpl = append(temp.ContractTpl, &idxContractTplPayload{
+				Index: idx, ContractTplPayload: msg.Payload.(*ContractTplPayload)})
 		} else if msg.App == APP_CONTRACT_DEPLOY {
-			temp.ContractDeploy = append(temp.ContractDeploy, &idxContractDeployPayload{Index: idx, ContractDeployPayload: msg.Payload.(*ContractDeployPayload)})
+			temp.ContractDeploy = append(temp.ContractDeploy, &idxContractDeployPayload{
+				Index: idx, ContractDeployPayload: msg.Payload.(*ContractDeployPayload)})
 		} else if msg.App == APP_CONTRACT_STOP {
-			temp.ContractStop = append(temp.ContractStop, &idxContractStopPayload{Index: idx, ContractStopPayload: msg.Payload.(*ContractStopPayload)})
+			temp.ContractStop = append(temp.ContractStop, &idxContractStopPayload{
+				Index: idx, ContractStopPayload: msg.Payload.(*ContractStopPayload)})
 		} else if msg.App == APP_CONTRACT_INVOKE_REQUEST {
 			temp.ContractInvokeRequest = append(temp.ContractInvokeRequest,
 				&idxContractInvokeRequestPayload{
-					Index: idx,
+					Index:                        idx,
 					ContractInvokeRequestPayload: msg.Payload.(*ContractInvokeRequestPayload),
 				})
 		} else if msg.App == APP_CONTRACT_TPL_REQUEST {
 			temp.ContractInstallRequest = append(temp.ContractInstallRequest,
 				&idxContractInstallRequestPayload{
-					Index: idx,
+					Index:                         idx,
 					ContractInstallRequestPayload: msg.Payload.(*ContractInstallRequestPayload),
 				})
 		} else if msg.App == APP_CONTRACT_DEPLOY_REQUEST {
 			temp.ContractDeployRequest = append(temp.ContractDeployRequest,
 				&idxContractDeployRequestPayload{
-					Index: idx,
+					Index:                        idx,
 					ContractDeployRequestPayload: msg.Payload.(*ContractDeployRequestPayload),
 				})
 		} else if msg.App == APP_CONTRACT_STOP_REQUEST {
 			temp.ContractStopRequest = append(temp.ContractStopRequest,
 				&idxContractStopRequestPayload{
-					Index: idx,
+					Index:                      idx,
 					ContractStopRequestPayload: msg.Payload.(*ContractStopRequestPayload),
 				})
 		} else if msg.App == APP_DATA {
 			temp.Text = append(temp.Text, &idxTextPayload{Index: idx, DataPayload: msg.Payload.(*DataPayload)})
 		} else if msg.App == APP_SIGNATURE {
-			temp.Signature = append(temp.Signature, &idxSignaturePayload{Index: idx, SignaturePayload: msg.Payload.(*SignaturePayload)})
-			//} else if msg.App == APP_CONFIG {
-			//	temp.Config = append(temp.Config, &idxConfigPayload{Index: idx, ConfigPayload: msg.Payload.(*ConfigPayload)})
-		} else if msg.App == OP_MEDIATOR_CREATE {
-			temp.MediatorCreateOperation = append(temp.MediatorCreateOperation,
-				&idxMediatorCreateOperation{Index: idx, MediatorCreateOperation: msg.Payload.(*MediatorCreateOperation)})
-		} else if msg.App == OP_ACCOUNT_UPDATE {
+			temp.Signature = append(temp.Signature, &idxSignaturePayload{
+				Index: idx, SignaturePayload: msg.Payload.(*SignaturePayload)})
+
+		} else if msg.App == APP_ACCOUNT_UPDATE {
 			temp.AccountUpdateOperation = append(temp.AccountUpdateOperation,
-				&idxAccountUpdateOperation{Index: idx, AccountUpdateOperation: msg.Payload.(*AccountUpdateOperation)})
+				&idxAccountUpdateOperation{Index: idx, AccountStateUpdatePayload: msg.Payload.(*AccountStateUpdatePayload)})
 		} else {
 			return nil, errors.New("Unsupport APP" + strconv.Itoa(int(msg.App)) + " please edit transaction_json.go")
 		}
@@ -178,6 +185,14 @@ func tx2JsonTemp(tx *Transaction) (*txJsonTemp, error) {
 }
 
 func jsonTemp2tx(tx *Transaction, temp *txJsonTemp) error {
+	if len(temp.CertId) > 0 {
+		intCertID, _ := new(big.Int).SetString(temp.CertId, 10)
+		if intCertID == nil {
+			return fmt.Errorf("certid is invalid")
+		}
+		tx.CertId = intCertID.Bytes()
+	}
+	tx.Illegal = temp.Illegal
 	tx.TxMessages = make([]*Message, temp.MsgCount)
 	processed := 0
 	for _, p := range temp.Payment {
@@ -228,16 +243,8 @@ func jsonTemp2tx(tx *Transaction, temp *txJsonTemp) error {
 		tx.TxMessages[p.Index] = NewMessage(APP_SIGNATURE, p.SignaturePayload)
 		processed++
 	}
-	//for _, p := range temp.Config {
-	//	tx.TxMessages[p.Index] = NewMessage(APP_CONFIG, p.ConfigPayload)
-	//	processed++
-	//}
-	for _, p := range temp.MediatorCreateOperation {
-		tx.TxMessages[p.Index] = NewMessage(OP_MEDIATOR_CREATE, p.MediatorCreateOperation)
-		processed++
-	}
 	for _, p := range temp.AccountUpdateOperation {
-		tx.TxMessages[p.Index] = NewMessage(OP_ACCOUNT_UPDATE, p.AccountUpdateOperation)
+		tx.TxMessages[p.Index] = NewMessage(APP_ACCOUNT_UPDATE, p.AccountStateUpdatePayload)
 		processed++
 	}
 	if processed < temp.MsgCount {
@@ -256,7 +263,7 @@ func (tx *Transaction) MarshalJSON() ([]byte, error) {
 
 func (tx *Transaction) UnmarshalJSON(data []byte) error {
 	temp := &txJsonTemp{}
-	err := json.Unmarshal([]byte(data), temp)
+	err := json.Unmarshal(data, temp)
 	if err != nil {
 		return err
 	}

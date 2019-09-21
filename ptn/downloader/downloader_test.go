@@ -72,7 +72,7 @@ type downloadTester struct {
 func newGenesisForTest(db ptndb.Database) *modules.Unit {
 	header := modules.NewHeader([]common.Hash{}, 1, []byte{})
 	header.Number.AssetID = modules.PTNCOIN
-	header.Number.IsMain = true
+	//header.Number.IsMain = true
 	header.Number.Index = 0
 	//
 	header.Time = time.Now().Unix()
@@ -124,7 +124,7 @@ func newDag(db ptndb.Database, gunit *modules.Unit, number int, seed byte) (modu
 	for i := 0; i < number; i++ {
 		header := modules.NewHeader([]common.Hash{par.UnitHash}, 1, []byte{seed})
 		header.Number.AssetID = par.UnitHeader.Number.AssetID
-		header.Number.IsMain = par.UnitHeader.Number.IsMain
+		//header.Number.IsMain = par.UnitHeader.Number.IsMain
 		header.Number.Index = par.UnitHeader.Number.Index + 1
 		//
 		header.Time = time.Now().Unix()
@@ -348,7 +348,7 @@ func (dl *downloadTester) sync(id string, td uint64, mode SyncMode) error {
 	dl.lock.RUnlock()
 
 	// Synchronise with the chosen peer and ensure proper cleanup afterwards
-	err := dl.downloader.synchronise(id, hash, td, mode, modules.PTNCOIN)
+	err := dl.downloader.synchronize(id, hash, td, mode, modules.PTNCOIN)
 	select {
 	case <-dl.downloader.cancelCh:
 		// Ok, downloader fully cancelled after sync cycle
@@ -401,7 +401,7 @@ func (dl *downloadTester) CurrentHeader(token modules.AssetId) *modules.Header {
 }
 
 // CurrentBlock retrieves the current head block from the canonical chain.
-func (dl *downloadTester) CurrentUnit(token modules.AssetId) *modules.Unit {
+func (dl *downloadTester) GetCurrentUnit(token modules.AssetId) *modules.Unit {
 	dl.lock.RLock()
 	defer dl.lock.RUnlock()
 
@@ -482,7 +482,7 @@ func (dl *downloadTester) InsertHeaderDag(headers []*modules.Header, checkFreq i
 }
 
 // InsertChain injects a new batch of blocks into the simulated chain.
-func (dl *downloadTester) InsertDag(blocks modules.Units, txpool txspool.ITxPool) (int, error) {
+func (dl *downloadTester) InsertDag(blocks modules.Units, txpool txspool.ITxPool, b bool) (int, error) {
 	dl.lock.Lock()
 	defer dl.lock.Unlock()
 	//blocks modules.Units
@@ -667,7 +667,7 @@ func (dlp *downloadTesterPeer) Head(assetId modules.AssetId) (common.Hash, *modu
 	defer dlp.dl.lock.RUnlock()
 	index := &modules.ChainIndex{
 		modules.PTNCOIN,
-		true,
+
 		0,
 	}
 	return dlp.dl.peerHashes[dlp.id][0], index
@@ -692,7 +692,7 @@ func (dlp *downloadTesterPeer) RequestHeadersByHash(origin common.Hash, amount i
 	dlp.dl.lock.RUnlock()
 	chainIndex := &modules.ChainIndex{
 		modules.PTNCOIN,
-		true,
+
 		number,
 	}
 	// Use the absolute header fetcher to satisfy the query
@@ -1028,7 +1028,7 @@ func testForkedSync(t *testing.T, protocol int, mode SyncMode) {
 	assertOwnForkedChain(t, tester, common+1, []int{common + fork + 1, common + fork + 1})
 }
 
-// Tests that synchronising against a much shorter but much heavyer fork works corrently and is not dropped.
+// Tests that synchronizing against a much shorter but much heavyer fork works corrently and is not dropped.
 //func TestHeavyForkedSync1(t *testing.T) { testHeavyForkedSync(t, 1, FullSync) }
 
 //func TestHeavyForkedSync63Full(t *testing.T) { testHeavyForkedSync(t, 2, FullSync) }
@@ -1306,13 +1306,13 @@ func testEmptyShortCircuit(t *testing.T, protocol int, mode SyncMode) {
 	tester.newPeer("peer", protocol, hashes, headers, blocks)
 
 	// Instrument the downloader to signal body requests
-	bodiesHave, receiptsHave := int32(0), int32(0)
+	bodiesHave := int32(0)
 	tester.downloader.bodyFetchHook = func(headers []*modules.Header) {
 		atomic.AddInt32(&bodiesHave, int32(len(headers)))
 	}
-	tester.downloader.receiptFetchHook = func(headers []*modules.Header) {
-		atomic.AddInt32(&receiptsHave, int32(len(headers)))
-	}
+	//tester.downloader.receiptFetchHook = func(headers []*modules.Header) {
+	//	atomic.AddInt32(&receiptsHave, int32(len(headers)))
+	//}
 	// Synchronise with the peer and make sure all blocks were retrieved
 	if err := tester.sync("peer", 0, mode); err != nil {
 		t.Fatalf("failed to synchronise blocks: %v", err)
@@ -1458,7 +1458,7 @@ func testInvalidHeaderRollback(t *testing.T, protocol int, mode SyncMode) {
 		t.Errorf("rollback head mismatch: have %v, want at most %v", head, 2*fsHeaderSafetyNet+MaxHeaderFetch)
 	}
 	if mode == FastSync {
-		if head := tester.CurrentUnit(token).NumberU64(); head != 0 {
+		if head := tester.GetCurrentUnit(token).NumberU64(); head != 0 {
 			t.Errorf("fast sync pivot block #%d not rolled back", head)
 		}
 	}
@@ -1482,7 +1482,7 @@ func testInvalidHeaderRollback(t *testing.T, protocol int, mode SyncMode) {
 		t.Errorf("rollback head mismatch: have %v, want at most %v", head, 2*fsHeaderSafetyNet+MaxHeaderFetch)
 	}
 	if mode == FastSync {
-		if head := tester.CurrentUnit(token).NumberU64(); head != 0 {
+		if head := tester.GetCurrentUnit(token).NumberU64(); head != 0 {
 			t.Errorf("fast sync pivot block #%d not rolled back", head)
 		}
 	}
@@ -1545,24 +1545,24 @@ func testBlockHeaderAttackerDropping(t *testing.T, protocol int) {
 		result error
 		drop   bool
 	}{
-		{nil, false},                        // Sync succeeded, all is well
-		{errBusy, false},                    // Sync is already in progress, no problem
-		{errUnknownPeer, false},             // Peer is unknown, was already dropped, don't double drop
-		{errBadPeer, true},                  // Peer was deemed bad for some reason, drop it
-		{errStallingPeer, true},             // Peer was detected to be stalling, drop it
-		{errNoPeers, false},                 // No peers to download from, soft race, no issue
-		{errTimeout, true},                  // No hashes received in due time, drop the peer
-		{errEmptyHeaderSet, true},           // No headers were returned as a response, drop as it's a dead end
-		{errPeersUnavailable, true},         // Nobody had the advertised blocks, drop the advertiser
-		{errInvalidAncestor, true},          // Agreed upon ancestor is not acceptable, drop the chain rewriter
-		{errInvalidChain, true},             // Hash chain was detected as invalid, definitely drop
-		{errInvalidBlock, false},            // A bad peer was detected, but not the sync origin
-		{errInvalidBody, false},             // A bad peer was detected, but not the sync origin
-		{errInvalidReceipt, false},          // A bad peer was detected, but not the sync origin
-		{errCancelBlockFetch, false},        // Synchronisation was canceled, origin may be innocent, don't drop
-		{errCancelHeaderFetch, false},       // Synchronisation was canceled, origin may be innocent, don't drop
-		{errCancelBodyFetch, false},         // Synchronisation was canceled, origin may be innocent, don't drop
-		{errCancelReceiptFetch, false},      // Synchronisation was canceled, origin may be innocent, don't drop
+		{nil, false},                // Sync succeeded, all is well
+		{errBusy, false},            // Sync is already in progress, no problem
+		{errUnknownPeer, false},     // Peer is unknown, was already dropped, don't double drop
+		{errBadPeer, true},          // Peer was deemed bad for some reason, drop it
+		{errStallingPeer, true},     // Peer was detected to be stalling, drop it
+		{errNoPeers, false},         // No peers to download from, soft race, no issue
+		{errTimeout, true},          // No hashes received in due time, drop the peer
+		{errEmptyHeaderSet, true},   // No headers were returned as a response, drop as it's a dead end
+		{errPeersUnavailable, true}, // Nobody had the advertised blocks, drop the advertiser
+		{errInvalidAncestor, true},  // Agreed upon ancestor is not acceptable, drop the chain rewriter
+		{errInvalidChain, true},     // Hash chain was detected as invalid, definitely drop
+		//{errInvalidBlock, false},            // A bad peer was detected, but not the sync origin
+		//{errInvalidBody, false},             // A bad peer was detected, but not the sync origin
+		//{errInvalidReceipt, false},          // A bad peer was detected, but not the sync origin
+		{errCancelBlockFetch, false},  // Synchronisation was canceled, origin may be innocent, don't drop
+		{errCancelHeaderFetch, false}, // Synchronisation was canceled, origin may be innocent, don't drop
+		{errCancelBodyFetch, false},   // Synchronisation was canceled, origin may be innocent, don't drop
+		//{errCancelReceiptFetch, false},      // Synchronisation was canceled, origin may be innocent, don't drop
 		{errCancelHeaderProcessing, false},  // Synchronisation was canceled, origin may be innocent, don't drop
 		{errCancelContentProcessing, false}, // Synchronisation was canceled, origin may be innocent, don't drop
 	}
@@ -1582,7 +1582,7 @@ func testBlockHeaderAttackerDropping(t *testing.T, protocol int) {
 		// Simulate a synchronisation and check the required result
 		tester.downloader.synchroniseMock = func(string, common.Hash) error { return tt.result }
 
-		tester.downloader.Synchronise(id, tester.genesis.Hash(), uint64(1000), FullSync, modules.PTNCOIN)
+		tester.downloader.Synchronize(id, tester.genesis.Hash(), uint64(1000), FullSync, modules.PTNCOIN)
 		if _, ok := tester.peerHashes[id]; !ok != tt.drop {
 			t.Errorf("test %d: peer drop mismatch for %v: have %v, want %v", i, tt.result, !ok, tt.drop)
 		}
@@ -1945,7 +1945,7 @@ func (ftp *floodingTestPeer) RequestNodeData(hashes []common.Hash) error {
 	return ftp.peer.RequestNodeData(hashes)
 }
 func (ftp *floodingTestPeer) RequestDagHeadersByHash(origin common.Hash, amount int, skip int, reverse bool) error {
-	return ftp.peer.RequestDagHeadersByHash(origin, amount, skip, reverse)
+	return nil //ftp.peer.RequestDagHeadersByHash(origin, amount, skip, reverse)
 }
 func (ftp *floodingTestPeer) RequestLeafNodes() error {
 	return ftp.peer.RequestLeafNodes()

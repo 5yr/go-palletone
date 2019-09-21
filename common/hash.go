@@ -25,7 +25,7 @@ import (
 	"reflect"
 	// "strings"
 	"crypto/sha256"
-	// "github.com/palletone/go-palletone/common/crypto/sha3"
+	// "golang.org/x/crypto/sha3"
 	"github.com/palletone/go-palletone/common/hexutil"
 
 	"strings"
@@ -69,6 +69,28 @@ func (h Hash) TerminalString() string {
 // doing full logging into a file.
 func (h Hash) String() string {
 	return h.Hex()
+}
+func (h Hash) IsZero() bool {
+	for _, v := range h {
+		if v != byte(0) {
+			return false
+		}
+	}
+	return true
+}
+
+//这是一个特殊Hash，表示引用自身
+func NewSelfHash() Hash {
+	return Hash{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+	0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
+}
+func (h Hash) IsSelfHash() bool {
+	for _, v := range h {
+		if v != byte(0xff) {
+			return false
+		}
+	}
+	return true
 }
 
 // Format implements fmt.Formatter, forcing the byte slice to be formatted as is,

@@ -29,60 +29,55 @@ import (
 	"github.com/palletone/go-palletone/dag/errors"
 	"github.com/palletone/go-palletone/dag/modules"
 	"github.com/palletone/go-palletone/tokenengine"
-	"reflect"
 )
 
 type UtxoDb struct {
 	db ptndb.Database
-	//logger log.ILogger
+	tokenEngine tokenengine.ITokenEngine
 }
 
-func NewUtxoDb(db ptndb.Database) *UtxoDb {
-	return &UtxoDb{db: db}
+func NewUtxoDb(db ptndb.Database,tokenEngine tokenengine.ITokenEngine) *UtxoDb {
+	return &UtxoDb{db: db,tokenEngine:tokenEngine}
 }
 
 type IUtxoDb interface {
-	GetPrefix(prefix []byte) map[string][]byte
-
 	GetUtxoEntry(outpoint *modules.OutPoint) (*modules.Utxo, error)
-	//GetUtxoPkScripHexByTxhash(txhash common.Hash, mindex, outindex uint32) (string, error)
-	//GetAddrOutput(addr string) ([]modules.Output, error)
+
 	GetAddrOutpoints(addr common.Address) ([]modules.OutPoint, error)
 	GetAddrUtxos(addr common.Address, asset *modules.Asset) (map[modules.OutPoint]*modules.Utxo, error)
 	GetAllUtxos() (map[modules.OutPoint]*modules.Utxo, error)
 	SaveUtxoEntity(outpoint *modules.OutPoint, utxo *modules.Utxo) error
 	SaveUtxoView(view map[modules.OutPoint]*modules.Utxo) error
-	DeleteUtxo(outpoint *modules.OutPoint) error
+	DeleteUtxo(outpoint *modules.OutPoint, spentTxId common.Hash, spentTime uint64) error
+	IsUtxoSpent(outpoint *modules.OutPoint) (bool, error)
+	GetStxoEntry(outpoint *modules.OutPoint) (*modules.Stxo, error)
+	ClearUtxo() error
 }
 
 // ###################### UTXO index for Address ######################
 // key: outpoint_prefix + addr + outpoint's Bytes
 func (utxodb *UtxoDb) saveUtxoOutpoint(address common.Address, outpoint *modules.OutPoint) error {
-	key := append(constants.AddrOutPoint_Prefix, address.Bytes()...)
+	key := append(constants.ADDR_OUTPOINT_PREFIX, address.Bytes()...)
 	key = append(key, outpoint.Bytes()...)
 
 	// save outpoint tofind address
-	out_key := append(constants.OutPointAddr_Prefix, outpoint.ToKey()...)
-	StoreBytes(utxodb.db, out_key, address.String())
-	return StoreBytes(utxodb.db, key, outpoint)
+	out_key := append(constants.OUTPOINT_ADDR_PREFIX, outpoint.ToKey()...)
+	StoreToRlpBytes(utxodb.db, out_key, address.String())
+	return StoreToRlpBytes(utxodb.db, key, outpoint)
 }
-func (utxodb *UtxoDb) batchSaveUtxoOutpoint(batch ptndb.Batch, address common.Address, outpoint *modules.OutPoint) error {
-	key := append(constants.AddrOutPoint_Prefix, address.Bytes()...)
+func (utxodb *UtxoDb) batchSaveUtxoOutpoint(batch ptndb.Batch, address common.Address,
+	outpoint *modules.OutPoint) error {
+	key := append(constants.ADDR_OUTPOINT_PREFIX, address.Bytes()...)
 	key = append(key, outpoint.Bytes()...)
-	return StoreBytes(batch, key, outpoint)
-	//val, err := rlp.EncodeToBytes(outpoint)
-	//if err != nil {
-	//	return err
-	//}
-	//return batch.Put(key, val)
+	return StoreToRlpBytes(batch, key, outpoint)
 }
 func (utxodb *UtxoDb) deleteUtxoOutpoint(address common.Address, outpoint *modules.OutPoint) error {
-	key := append(constants.AddrOutPoint_Prefix, address.Bytes()...)
+	key := append(constants.ADDR_OUTPOINT_PREFIX, address.Bytes()...)
 	key = append(key, outpoint.Bytes()...)
 	return utxodb.db.Delete(key)
 }
 func (db *UtxoDb) GetAddrOutpoints(address common.Address) ([]modules.OutPoint, error) {
-	data := db.GetPrefix(append(constants.AddrOutPoint_Prefix, address.Bytes()...))
+	data := getprefix(db.db, append(constants.ADDR_OUTPOINT_PREFIX, address.Bytes()...))
 	outpoints := make([]modules.OutPoint, 0)
 	for _, b := range data {
 		out := new(modules.OutPoint)
@@ -96,9 +91,8 @@ func (db *UtxoDb) GetAddrOutpoints(address common.Address) ([]modules.OutPoint, 
 // ###################### UTXO Entity ######################
 func (utxodb *UtxoDb) SaveUtxoEntity(outpoint *modules.OutPoint, utxo *modules.Utxo) error {
 	key := outpoint.ToKey()
-	address, _ := tokenengine.GetAddressFromScript(utxo.PkScript[:])
-	//log.Debug("Try to save utxo by key:", "outpoint_key", outpoint.String(), "and index by address:", address.String())
-	err := StoreBytes(utxodb.db, key, utxo)
+	address, _ := utxodb.tokenEngine.GetAddressFromScript(utxo.PkScript[:])
+	err := StoreToRlpBytes(utxodb.db, key, utxo)
 	if err != nil {
 		return err
 	}
@@ -112,20 +106,24 @@ func (utxodb *UtxoDb) SaveUtxoView(view map[modules.OutPoint]*modules.Utxo) erro
 	log.Debugf("Start batch save utxo, batch count:%d", len(view))
 	for outpoint, utxo := range view {
 		// No need to update the database if the utxo was not modified.
-		if utxo == nil { // || utxo.IsModified()
+		if utxo == nil {
 			continue
 		} else {
 			key := outpoint.ToKey()
-			err := StoreBytes(batch, key, utxo)
-			//val, err := rlp.EncodeToBytes(utxo)
+			err := StoreToRlpBytes(batch, key, utxo)
 			if err != nil {
+				log.Errorf("store utxo to db failed, key:[%s]", outpoint.String())
 				return err
 			}
-			//batch.Put(key, val)
-			address, _ := tokenengine.GetAddressFromScript(utxo.PkScript[:])
+			address, _ := utxodb.tokenEngine.GetAddressFromScript(utxo.PkScript[:])
 			// save utxoindex and  addr and key
-			utxodb.batchSaveUtxoOutpoint(batch, address, &outpoint)
-
+			item := new(modules.OutPoint)
+			item.TxHash = outpoint.TxHash
+			item.MessageIndex = outpoint.MessageIndex
+			item.OutIndex = outpoint.OutIndex
+			if err := utxodb.batchSaveUtxoOutpoint(batch, address, item); err != nil {
+				log.Errorf("batch_save_utxo failed,addr[%s] , error:[%s]", address.String(), err)
+			}
 		}
 	}
 
@@ -133,27 +131,22 @@ func (utxodb *UtxoDb) SaveUtxoView(view map[modules.OutPoint]*modules.Utxo) erro
 }
 
 // Remove the utxo
-func (utxodb *UtxoDb) DeleteUtxo(outpoint *modules.OutPoint) error {
+func (utxodb *UtxoDb) DeleteUtxo(outpoint *modules.OutPoint, spentTxId common.Hash, spentTime uint64) error {
 	//1. get utxo
 	utxo, err := utxodb.GetUtxoEntry(outpoint)
 	if err != nil {
-		log.Infof("Try to soft delete an unknown utxo by key:%s", outpoint.String())
 		return err
 	}
-
-	//2. soft delete utxo
-	if utxo.IsSpent() {
-		return errors.New("Try to soft delete a deleted utxo by key:" + outpoint.String())
-	}
 	key := outpoint.ToKey()
-	utxo.Spend()
-	//log.Debugf("Try to soft delete utxo by key:%s", outpoint.String())
-	err = StoreBytes(utxodb.db, key, utxo)
+
+	err = utxodb.db.Delete(key)
 	if err != nil {
 		return err
 	}
-	//3. Remove index
-	address, _ := tokenengine.GetAddressFromScript(utxo.PkScript[:])
+	//log.Debugf("Try delete utxo by key:%s, move to spent table", outpoint.String())
+	utxodb.SaveUtxoSpent(outpoint, utxo, spentTxId, spentTime)
+
+	address, _ := utxodb.tokenEngine.GetAddressFromScript(utxo.PkScript[:])
 	utxodb.deleteUtxoOutpoint(address, outpoint)
 	return nil
 }
@@ -170,11 +163,8 @@ func (utxodb *UtxoDb) GetUtxoEntry(outpoint *modules.OutPoint) (*modules.Utxo, e
 	utxo := new(modules.Utxo)
 	key := outpoint.ToKey()
 
-	log.Debugf("DB[%s] Query utxo by outpoint:%s", reflect.TypeOf(utxodb.db).String(), outpoint.String())
-	err := retrieve(utxodb.db, key, utxo)
-	//data, err := utxodb.db.Get(key)
+	err := RetrieveFromRlpBytes(utxodb.db, key, utxo)
 	if err != nil {
-		log.Info("get utxo entry failed", "error", err, "outpoint", outpoint.String())
 		if errors.IsNotFoundError(err) {
 			return nil, errors.ErrUtxoNotFound
 		}
@@ -182,76 +172,95 @@ func (utxodb *UtxoDb) GetUtxoEntry(outpoint *modules.OutPoint) (*modules.Utxo, e
 	}
 	return utxo, nil
 }
+func (utxodb *UtxoDb) SaveUtxoSpent(outpoint *modules.OutPoint, utxo *modules.Utxo,
+	spentTxId common.Hash, spentTime uint64) error {
+	stxo := modules.NewStxo(utxo, spentTxId, spentTime)
+	return utxodb.SaveStxoEntry(outpoint, stxo)
+}
+func (utxodb *UtxoDb) SaveStxoEntry(outpoint *modules.OutPoint, stxo *modules.Stxo) error {
+	key := append(constants.SPENT_UTXO_PREFIX, outpoint.ToKey()...)
+	//stxo := modules.NewStxo(utxo, spentTxId, spentTime)
+	return StoreToRlpBytes(utxodb.db, key, stxo)
+}
+func (utxodb *UtxoDb) IsUtxoSpent(outpoint *modules.OutPoint) (bool, error) {
+	key := append(constants.SPENT_UTXO_PREFIX, outpoint.ToKey()...)
+	return utxodb.db.Has(key)
+}
+func (utxodb *UtxoDb) GetStxoEntry(outpoint *modules.OutPoint) (*modules.Stxo, error) {
+	key := append(constants.SPENT_UTXO_PREFIX, outpoint.ToKey()...)
+	stxo := &modules.Stxo{}
+	err := RetrieveFromRlpBytes(utxodb.db, key, stxo)
+	if err != nil {
+		return nil, err
+	}
+	return stxo, nil
+}
 
-//
-//func (utxodb *UtxoDb) GetUtxoPkScripHexByTxhash(txhash common.Hash, mindex, outindex uint32) (string, error) {
-//	outpoint := &modules.OutPoint{TxHash: txhash, MessageIndex: mindex, OutIndex: outindex}
-//	utxo, err := utxodb.GetUtxoEntry(outpoint)
-//	if err != nil {
-//		return "", err
-//	}
-//	if utxo == nil {
-//		return "", errors.New("get the pkscript is failed,the utxo is null.")
-//	}
-//	return hexutil.Encode(utxo.PkScript), nil
-//}
-
-//func (utxodb *UtxoDb) GetUtxoByIndex(indexKey []byte) ([]byte, error) {
-//	return utxodb.db.Get(indexKey)
-//}
-
-//func (db *UtxoDb) GetAddrOutput(addr string) ([]modules.Output, error) {
-//
-//	data := db.GetPrefix(append(constants.AddrOutput_Prefix, []byte(addr)...))
-//	outputs := make([]modules.Output, 0)
-//	for _, b := range data {
-//		out := new(modules.Output)
-//		if err := rlp.DecodeBytes(b, out); err == nil {
-//			outputs = append(outputs, *out)
-//		}
-//	}
-//	return outputs, nil
-//}
 //GetAddrUtxos if asset is nil, query all Asset from address
-func (db *UtxoDb) GetAddrUtxos(addr common.Address, asset *modules.Asset) (map[modules.OutPoint]*modules.Utxo, error) {
-	allutxos := make(map[modules.OutPoint]*modules.Utxo, 0)
+func (db *UtxoDb) GetAddrUtxos(addr common.Address, asset *modules.Asset) (
+	map[modules.OutPoint]*modules.Utxo, error) {
+	allutxos := make(map[modules.OutPoint]*modules.Utxo)
 	outpoints, err := db.GetAddrOutpoints(addr)
 	if err != nil {
 		return nil, err
 	}
 	for _, out := range outpoints {
-		if utxo, err := db.GetUtxoEntry(&out); err == nil {
-			if !utxo.IsSpent() {
-				if asset == nil || asset.IsSimilar(utxo.Asset) {
-					allutxos[out] = utxo
-				}
+		item := new(modules.OutPoint)
+		item.TxHash = out.TxHash
+		item.MessageIndex = out.MessageIndex
+		item.OutIndex = out.OutIndex
+		if utxo, err := db.GetUtxoEntry(item); err == nil {
+
+			if asset == nil || asset.IsSimilar(utxo.Asset) {
+				allutxos[out] = utxo
+
 			}
 		}
 	}
 	return allutxos, nil
 }
 func (db *UtxoDb) GetAllUtxos() (map[modules.OutPoint]*modules.Utxo, error) {
-	view := make(map[modules.OutPoint]*modules.Utxo, 0)
+	view := make(map[modules.OutPoint]*modules.Utxo)
 
-	items := db.GetPrefix(constants.UTXO_PREFIX)
+	items := getprefix(db.db, constants.UTXO_PREFIX)
 	var err error
 	for key, itme := range items {
 		utxo := new(modules.Utxo)
-		// outpint := new(modules.OutPoint)
 		if err = rlp.DecodeBytes(itme, utxo); err == nil {
-			if !utxo.IsSpent() {
-				outpoint := modules.KeyToOutpoint([]byte(key))
-				view[*outpoint] = utxo
-			}
+
+			outpoint := modules.KeyToOutpoint([]byte(key))
+			view[*outpoint] = utxo
+
 		}
 	}
 
 	return view, err
 }
-
-// get prefix: return maps
-func (db *UtxoDb) GetPrefix(prefix []byte) map[string][]byte {
-	return getprefix(db.db, prefix)
+func (db *UtxoDb) ClearUtxo() error {
+	err := clearByPrefix(db.db, constants.UTXO_PREFIX)
+	if err != nil {
+		return err
+	}
+	err = clearByPrefix(db.db, constants.ADDR_OUTPOINT_PREFIX)
+	if err != nil {
+		return err
+	}
+	err = clearByPrefix(db.db, constants.UTXO_INDEX_PREFIX)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+func clearByPrefix(db ptndb.Database, prefix []byte) error {
+	iter := db.NewIteratorWithPrefix(prefix)
+	for iter.Next() {
+		key := iter.Key()
+		err := db.Delete(key)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ###################### GET IMPL END ######################

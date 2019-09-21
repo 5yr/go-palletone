@@ -20,99 +20,18 @@
 package storage
 
 import (
-	"errors"
-	"fmt"
+	"github.com/palletone/go-palletone/tokenengine"
 	"log"
-	"strconv"
 	"testing"
-	"time"
 
-	"github.com/palletone/go-palletone/common"
-	"github.com/palletone/go-palletone/common/ptndb"
 	"github.com/ethereum/go-ethereum/rlp"
-	"github.com/palletone/go-palletone/dag/modules"
+	"github.com/palletone/go-palletone/common/ptndb"
 )
-
-func TestSaveJoint(t *testing.T) {
-	Dbconn, _ := ptndb.NewMemDatabase()
-	if Dbconn == nil {
-		fmt.Println("Connect to db error.")
-		return
-	}
-
-	log.Println(strconv.FormatInt(time.Now().Unix(), 10))
-	var p []common.Hash
-	//log.Println("assets:", ty[0].String(), ty[1].String())
-	p = append(p, common.HexToHash("123"), common.HexToHash("456"))
-	h := modules.NewHeader(p, uint64(111), []byte("hello"))
-	txs := make(modules.Transactions, 0)
-	u := modules.NewUnit(h, txs)
-	err := SaveJoint(Dbconn, &modules.Joint{Unit: u},
-		func() { log.Println("ok") })
-	log.Println("error:", err)
-}
-
-func TestAddUnitKey(t *testing.T) {
-	// Dbconn := ReNewDbConn(dagconfig.DbPath)
-	Dbconn, _ := ptndb.NewMemDatabase()
-	if Dbconn == nil {
-		fmt.Println("Connect mem db error.")
-		return
-	}
-	keys := []string{"unit1231526522017", "unit1231526521834"}
-
-	value := []int{123456, 987654}
-	for i, v := range keys {
-		log.Println("key: ", v, "value: ", value[i])
-		if err := Dbconn.Put([]byte(v), ConvertBytes(value[i])); err != nil {
-			log.Println("put error", err)
-			t.Fatal("error2")
-		}
-		log.Println("this value:", string(ConvertBytes(value[i])))
-	}
-
-	log.Println("success")
-}
-
-func TestGetUnitKeys(t *testing.T) {
-	Dbconn, _ := ptndb.NewMemDatabase()
-	if Dbconn == nil {
-		fmt.Println("Connect mem db error.")
-		return
-	}
-	t0 := time.Now()
-
-	keys := GetUnitKeys(Dbconn)
-	var this []string
-	for i, v := range keys {
-		var exist bool
-		for j := i + 1; j < len(keys); j++ {
-			if v == keys[j] {
-				log.Println("j:", j)
-				exist = true
-				log.Println("equal", v)
-				break
-			}
-		}
-		if !exist {
-			// logger.Println("i:", i)
-			this = append(this, v)
-		}
-	}
-
-	err := AddUnitKeys(Dbconn, "unit1231526521834")
-	if errors.New("key is already exist.").Error() == err.Error() {
-		log.Println("success test add unit", keys) // this
-	} else {
-		log.Println("failed test add  unit ")
-	}
-	log.Println("times:", (time.Now().UnixNano()-t0.UnixNano())/1e6)
-}
 
 func TestDBBatch(t *testing.T) {
 	Dbconn, _ := ptndb.NewMemDatabase()
 	if Dbconn == nil {
-		fmt.Println("Connect mem  db error.")
+		log.Println("Connect mem  db error.")
 		return
 	}
 	table := ptndb.NewTable(Dbconn, "hehe")
@@ -139,78 +58,29 @@ func TestSaveUtxos(t *testing.T) {
 	// 0. initiate db
 	Dbconn, err := ptndb.NewMemDatabase()
 	if Dbconn == nil {
-		fmt.Println("Connect mem db error.")
+		log.Println("Connect mem db error.")
 		return
 	}
-	//l := plog.NewTestLog()
-	utxodb := NewUtxoDb(Dbconn)
+	utxodb := NewUtxoDb(Dbconn, tokenengine.Instance)
 
 	//1. construct object
 	myplane := NewAirPlane()
-	fmt.Println("myplane is :", myplane)
+	log.Println("myplane is :", myplane)
 	myplane2 := NewAirPlane()
-	fmt.Println("myplane2 is :", myplane2)
+	log.Println("myplane2 is :", myplane2)
 	cap := make([]airPlane, 0)
 	cap = append(cap, *myplane, *myplane2)
-	fmt.Println(" cap :", cap)
+	log.Println(" cap :", cap)
 	//2. store object
-	StoreBytes(utxodb.db, []byte("testkey"), &cap)
+	StoreToRlpBytes(utxodb.db, []byte("testkey"), &cap)
 	//3. load object
 	something, err := utxodb.db.Get([]byte("testkey"))
 
-	fmt.Println("db get err:", err)
-	fmt.Println("byte data:", something)
+	log.Println("db get err:", err)
+	log.Println("byte data:", something)
 	p := new([]airPlane)
 	err2 := rlp.DecodeBytes(something, p)
-	fmt.Println("decoded error:", err2)
-	fmt.Printf("decoded data:%v\n", p)
+	log.Println("decoded error:", err2)
+	log.Printf("decoded data:%v\n", p)
 
 }
-
-//func TestAddToken(t *testing.T) {
-//	// dbconn := ReNewDbConn("/Users/jay/code/gocode/src/github.com/palletone/go-palletone/bin/work/gptn/leveldb/")
-//	// if dbconn == nil {
-//	// 	fmt.Println("Connect to db error.")
-//	// 	return
-//	// }
-//	dbconn, _ := ptndb.NewMemDatabase()
-//
-//	token := new(modules.TokenInfo)
-//	token.TokenHex = modules.PTNCOIN.String()
-//	token.Token = modules.PTNCOIN
-//	token.Name = "ptn"
-//	token.Creator = "jay"
-//	token.CreationDate = time.Now().Format(modules.TimeFormatString)
-//	infos := new(tokenInfo)
-//	infos.Items = make(map[string]*modules.TokenInfo)
-//	infos.Items[string(constants.TOKENTYPE)+token.TokenHex] = token
-//	// bytes, err := rlp.EncodeToBytes(infos)
-//	// if err != nil {
-//	// 	t.Errorf("error: %v", err)
-//	// 	return
-//	// }
-//	bytes, _ := json.Marshal(infos)
-//	if err := dbconn.Put(constants.TOKENINFOS, bytes); err != nil {
-//		t.Error("failed")
-//		return
-//	}
-//
-//	if bytes, err := dbconn.Get(constants.TOKENINFOS); err != nil {
-//		t.Error("get token infos error:", err)
-//		return
-//	} else {
-//		log.Println("json  bytes:", bytes)
-//		token_info := new(tokenInfo)
-//		token_info.Items = make(map[string]*modules.TokenInfo)
-//		// if err := rlp.DecodeBytes(bytes, &token_info); err != nil {
-//		// 	t.Error("decode error:", err)
-//		// 	return
-//		// }
-//		err := json.Unmarshal(bytes, &token_info)
-//		log.Println("token_info: ", err, token_info)
-//	}
-//}
-//
-//type tokenInfo struct {
-//	Items map[string]*modules.TokenInfo //  token_info’json string
-//}

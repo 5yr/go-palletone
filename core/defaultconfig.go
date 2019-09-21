@@ -21,46 +21,63 @@
 package core
 
 const (
-	DefaultAlias       = "PTN"
 	DefaultTokenAmount = "100000000000000000"
 	//DefaultTokenDecimal              = 8
-	DefaultChainID                   = 1
-	DefaultDepositRate               = "0.02"
-	DefaultTxCoinYearRate            = "0.01"
-	DefaultGenerateUnitReward        = "100000000"
-	DefaultDepositPeriod             = "0"
-	DefaultDepositAmountForMediator  = "200000000000"
-	DefaultDepositAmountForJury      = "100000000000"
-	DefaultDepositAmountForDeveloper = "80000000000"
-	DefaultFoundationAddress = "P1LA8TkEWxU6FcMzkyeSbf9b9FwZwxrYRuF"
+	DefaultChainID           = 1
+	DefaultPledgeDailyReward = 288745000
+	// DefaultTxCoinYearRate            = 0
+	DefaultRewardHeight              = 100
+	DefaultGenerateUnitReward        = 15000
+	DefaultDepositPeriod             = 0
+	DefaultDepositAmountForMediator  = 50 * 100000000
+	DefaultDepositAmountForJury      = 10 * 100000000
+	DefaultDepositAmountForDeveloper = 1 * 100000000
+	DefaultFoundationAddress         = "P1LA8TkEWxU6FcMzkyeSbf9b9FwZwxrYRuF"
 
-	DefaultUccMemory  = "1073741824" //物理内存  1073741824  1G
-	DefaultUccMemorySwap  = "1073741824"//内存交换区，不设置默认为memory的两倍
-	DefaultUccCpuShares  = "1024"//CPU占用率，相对的  CPU 利用率权重，默认为 1024
-	DefaultCpuPeriod  = "50000"// 限制CPU --cpu-period=50000 --cpu-quota=25000
-	DefaultUccCpuQuota  = "25000"//限制CPU 周期设为 50000，将容器在每个周期内的 CPU 配额设置为 25000，表示该容器每 50ms 可以得到 50% 的 CPU 运行时间
-	DefaultUccCpuSetCpus  = "0-3"//限制使用某些CPUS  "1,3"  "0-3"
+	DefaultUccMemory      = 524288000  // 每个容器使用内存最大 = 524288000 = 500 M
+	DefaultUccCpuShares   = 1024       // 每个容器相对占用CPU 1024 = 1 CPU
+	DefaultUccCpuQuota    = 100000     //  每个容器最多使用CPU核数 = 1 CPU
+	DefaultUccDisk        = 1073741824 //  每个容器磁盘使用量最多使用 = 1073741824 = 1G
+	DefaultUccPrivileged  = false
+	DefaultUccNetworkMode = "gptn-net" //TODO xiaozhi 生产环境
+	//DefaultUccNetworkMode    = "host" //TODO xiaozhi 测试容器运行网络模式
+	DefaultUccOOMKillDisable = false
 
-	DefaultTempUccMemory  = "1073741824" //物理内存  1073741824  1G
-	DefaultTempUccMemorySwap  = "1073741824"//内存交换区，不设置默认为memory的两倍 1073741824  1G
-	DefaultTempUccCpuShares  = "512"//CPU占用率，相对的  CPU 利用率权重，默认为 1024
-	DefaultTempUccCpuQuota  = "200000"//限制CPU 200%上限
+	DefaultContainerDuringTime  = 604800 //7天 = 604800 秒
+	DefaultRmExpConFromSysParam = true   //默认删除过期合约容器以系统参数 7 天为主
 
+	DefaultTempUccMemory    = 1073741824
+	DefaultTempUccCpuShares = 1024
+	DefaultTempUccCpuQuota  = 200000
 
-	DefaultTokenHolder       = "P1Kp2hcLhGEP45Xgx7vmSrE37QXunJUd8gJ"
+	DefaultTokenHolder = "P1Kp2hcLhGEP45Xgx7vmSrE37QXunJUd8gJ"
 
 	DefaultMediator = "P1Da7wwuvXgwqFm17GsLs4Cp4SLiPXZ6paF"
 	DefaultNodeInfo = "pnode://4bdc1c533f6e3700a0a6cc346bf2364eace58a10d8a782762c8d2b27cf4d96c25827c82a15" +
 		"684d348e88722b259f31abcccd4d0eaae0f52eeb85e1eb5342b862@127.0.0.1:30303"
-	DefaultInitPubKey = "XmMwxWh6J71HtzndJy37gNDE9zcZqnHANkbxLHfBWYQwfBJyLeWq17kNRRR4bavoe3Brf5oGpWCYBy" +
-		"MpbsWk45ymz4kmjU2AZo8Rm3mJ3MQHpdAgTo2nzWmqU3vCTW6qCfviPD1MKu3FJtmaWiLzdavLx831eCBXA1CdaiXAeU5MPcQ"
+	DefaultInitPubKey = "2SvBCoCHWA8Zg2Q8v2onmaTeZj6YmWLbp6mzoCZeDwiUcmuqFwd8fZXCfdmEhTodbWaSJ8T7MvjQiZkn4S9VTQnKDr" +
+		"EkETt84Sr58vmjVdhdXNjjzqn8j6oHzvduxGo4UjWB66wd1GFXKoz5XD8hcPDzCyGVqZLjb7wu2pkJxeG1Mt3"
 
 	DefaultJuryAddr = "P16bXzewsexHwhGYdt1c1qbzjBirCqDg8mN"
 
-	DefaultMaxMediatorCount    = 255
-	DefaultMediatorCount       = 5 //21
-	DefaultMinMediatorCount    = 5 //21
+	DefaultMaxMediatorCount    = 1
+	DefaultActiveMediatorCount = 5 //21
+	DefaultMinMediatorCount    = 1 //21
 	DefaultMinMediatorInterval = 1
+	DefaultMinMaintSkipSlots   = 0
+
+	//contract
+	DefaultContractSystemVersion = "" //contractId1:v1;contractId2:v2;contractId3:v3
+
+	DefaultContractSignatureNum = 3
+	DefaultContractElectionNum  = 4
+
+	DefaultContractTxTimeoutUnitFee  = 10 //s
+	DefaultContractTxSizeUnitFee     = 1  //byte
+	DefaultContractTxInstallFeeLevel = 2.5
+	DefaultContractTxDeployFeeLevel  = 1.5
+	DefaultContractTxInvokeFeeLevel  = 1.0
+	DefaultContractTxStopFeeLevel    = 0.5
 
 	DefaultText = "姓名 丨 坐标 丨 简介   \r\n" +
 		"孟岩丨北京丨通证派倡导者、CSDN副总裁、柏链道捷CEO.\r\n" +
@@ -114,11 +131,15 @@ const (
 	PalletOne1Percent              = PalletOne100Percent / 100
 	PalletOneIrreversibleThreshold = 70 * PalletOne1Percent
 
-	DefaultMediatorInterval    = 3       //5 /* seconds */
-	DefaultMaintenanceInterval = 60 * 10 //60 * 60 * 24 // seconds, aka: 1 day
+	DefaultMediatorInterval     = 2      //Devin: Don't change   /* seconds */
+	DefaultMaintenanceInterval  = 60 * 5 // 60 * 60 * 24 // seconds, aka: 1 day
+	DefaultMaintenanceSkipSlots = 0      //Devin: Don't change // 1 // number of slots to skip for maintenance interval
 
-	DefaultMediatorCreateFee        = 5000
-	DefaultAccountUpdateFee         = 20
-	DefaultTransferPtnBaseFee       = 20
-	DefaultTransferPtnPricePerKByte = 20
+	DefaultMediatorCreateFee        = 50000
+	DefaultAccountUpdateFee         = 5000
+	DefaultTransferPtnBaseFee       = 5000
+	DefaultTransferPtnPricePerKByte = 30000
+	DefaultContractInvokeFee        = 100000000
+
+	DefaultUnitMaxSize = 5 * 1024 * 1024 //5M
 )

@@ -21,7 +21,7 @@ import (
 
 	"github.com/palletone/go-palletone/common"
 	"github.com/palletone/go-palletone/common/hexutil"
-	mp "github.com/palletone/go-palletone/consensus/mediatorplugin"
+	// mp "github.com/palletone/go-palletone/consensus/mediatorplugin"
 	"github.com/palletone/go-palletone/dag/errors"
 	"github.com/shopspring/decimal"
 )
@@ -72,7 +72,7 @@ func NewPublicDebugAPI(ptn *PalletOne) *PublicDebugAPI {
 // the private debugging endpoint.
 type PrivateDebugAPI struct {
 	//config *configure.ChainConfig
-	ptn *PalletOne
+	//ptn *PalletOne
 }
 
 // NewPrivateDebugAPI creates a new API definition for the full node-related
@@ -106,6 +106,6 @@ type TransferPtnArgs struct {
 	Text   *string         `json:"text"`
 }
 
-func (api *PublicPalletOneAPI) TransferPtn(args TransferPtnArgs) (*mp.TxExecuteResult, error) {
-	return api.p.TransferPtn(args.From, args.To, args.Amount, args.Text)
-}
+// func (api *PublicPalletOneAPI) TransferPtn(args TransferPtnArgs) (*ptnapi.TxExecuteResult, error) {
+// 	return api.p.TransferPtn(args.From, args.To, args.Amount, args.Text)
+// }
